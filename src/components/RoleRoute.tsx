@@ -12,7 +12,7 @@ export default function RoleRoute({ children, allowed }: RoleRouteProps) {
   const { role, loading } = useAuth();
   if (loading) return null;
   if (!role || !allowed.includes(role as AppRole)) {
-    return <Navigate to="/dashboard" replace />;
+    return <Navigate to={role === "client" ? "/portal" : "/dashboard"} replace />;
   }
   return <>{children}</>;
 }

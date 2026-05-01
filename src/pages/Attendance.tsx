@@ -112,9 +112,8 @@ function ElapsedTimer({ clockIn, compact = false }: { clockIn: string; compact?:
   }, [clockIn]);
   const h = Math.floor(secs / 3600);
   const m = Math.floor((secs % 3600) / 60);
-  const s = secs % 60;
-  if (compact) return <span className="font-mono tabular-nums text-primary text-sm">{String(h).padStart(2,"0")}:{String(m).padStart(2,"0")}:{String(s).padStart(2,"0")}</span>;
-  return <span className="font-mono tabular-nums font-bold text-2xl text-primary">{String(h).padStart(2,"0")}:{String(m).padStart(2,"0")}:{String(s).padStart(2,"0")}</span>;
+  if (compact) return <span className="font-mono tabular-nums text-primary text-sm">{String(h).padStart(2,"0")}:{String(m).padStart(2,"0")}</span>;
+  return <span className="font-mono tabular-nums font-bold text-2xl text-primary">{String(h).padStart(2,"0")}:{String(m).padStart(2,"0")}</span>;
 }
 
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];

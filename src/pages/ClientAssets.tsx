@@ -22,13 +22,10 @@ import {
 import { cn } from "@/lib/utils";
 
 /**
- * Resolves a stored file_url to a displayable URL.
- * - Legacy rows store the full public CDN URL → return as-is
- * - New rows store only the file path → generate a 1-hour signed URL
+ * Resolves an asset ID to a displayable URL.
  */
-async function resolveSignedUrl(fileUrl: string): Promise<string> {
-  if (!fileUrl || fileUrl.startsWith("http")) return fileUrl;
-  const { data } = await backend.storage.from("client-assets").createSignedUrl(fileUrl, 3600);
+async function resolveSignedUrl(assetId: string): Promise<string> {
+  const { data } = await backend.storage.from("client-assets").createSignedUrl(assetId);
   return data?.signedUrl ?? "";
 }
 
@@ -110,20 +107,32 @@ function clientInitials(name: string) {
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
-function FileCard({ asset, canDelete, onDelete }: { asset: Asset; canDelete: boolean; onDelete: () => void }) {
-  const [displayUrl, setDisplayUrl] = useState(asset.file_url.startsWith("http") ? asset.file_url : "");
+function FileCard({ asset, canDelete, onDelete, onPreview }: { asset: Asset; canDelete: boolean; onDelete: () => void; onPreview: () => void }) {
+  const [displayUrl, setDisplayUrl] = useState("");
 
   useEffect(() => {
-    if (!asset.file_url.startsWith("http")) {
-      resolveSignedUrl(asset.file_url).then(setDisplayUrl);
+    if (asset.file_url.startsWith("http")) {
+      setDisplayUrl(asset.file_url);
+    } else {
+      resolveSignedUrl(asset.id).then(setDisplayUrl);
     }
-  }, [asset.file_url]);
+  }, [asset.id, asset.file_url]);
+
+  const canPreview = isImage(asset.file_type) || asset.file_type === "application/pdf";
 
   return (
     <div className="group rounded-xl border border-border bg-card p-4 flex flex-col gap-3 hover:shadow-md transition-all">
-      <div className="h-28 w-full rounded-lg bg-muted flex items-center justify-center overflow-hidden">
+      <div
+        className={cn("h-28 w-full rounded-lg bg-muted flex items-center justify-center overflow-hidden", canPreview && displayUrl && "cursor-pointer")}
+        onClick={() => canPreview && displayUrl && onPreview()}
+      >
         {isImage(asset.file_type) && displayUrl ? (
           <img src={displayUrl} alt={asset.file_name} className="h-full w-full object-cover rounded-lg" />
+        ) : asset.file_type === "application/pdf" ? (
+          <div className="flex flex-col items-center gap-1 text-muted-foreground">
+            <FileIcon className="h-8 w-8" />
+            <span className="text-[10px] font-medium uppercase tracking-wide">PDF</span>
+          </div>
         ) : (
           <FileIcon className="h-8 w-8 text-muted-foreground" />
         )}
@@ -134,6 +143,12 @@ function FileCard({ asset, canDelete, onDelete }: { asset: Asset; canDelete: boo
         {asset.notes && <p className="text-[11px] text-muted-foreground mt-1 line-clamp-2">{asset.notes}</p>}
       </div>
       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        {canPreview && displayUrl && (
+          <button onClick={onPreview}
+            className="flex-1 flex items-center justify-center gap-1 rounded-md border border-border py-1 text-xs text-muted-foreground hover:bg-muted transition-colors">
+            <Image className="h-3 w-3" /> Preview
+          </button>
+        )}
         {displayUrl && (
           <a href={displayUrl} target="_blank" rel="noopener noreferrer"
             className="flex-1 flex items-center justify-center gap-1 rounded-md border border-border py-1 text-xs text-muted-foreground hover:bg-muted transition-colors">
@@ -399,6 +414,8 @@ export default function ClientAssets() {
 
   const canManage = role === "admin" || role === "manager";
   const canDelete = role === "admin";
+  const [previewingAsset, setPreviewingAsset] = useState<Asset | null>(null);
+  const [previewUrl, setPreviewUrl] = useState("");
 
   // Fetch clients
   useEffect(() => {
@@ -427,6 +444,17 @@ export default function ClientAssets() {
     const { error } = await backend.from("client_assets").delete().eq("id", assetId);
     if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
     else fetchAssets();
+  };
+
+  const handlePreview = async (asset: Asset) => {
+    setPreviewingAsset(asset);
+    setPreviewUrl("");
+    if (asset.file_url.startsWith("http")) {
+      setPreviewUrl(asset.file_url);
+    } else {
+      const url = await resolveSignedUrl(asset.id);
+      setPreviewUrl(url);
+    }
   };
 
   // Filtered assets
@@ -649,9 +677,9 @@ export default function ClientAssets() {
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 pb-4">
                     {filtered.map(asset => {
-                      const props = { asset, canDelete, onDelete: () => handleDelete(asset.id) };
-                      if (asset.content_type === "link") return <LinkCard key={asset.id} {...props} />;
-                      if (asset.content_type === "note") return <NoteCard key={asset.id} {...props} />;
+                      const props = { asset, canDelete, onDelete: () => handleDelete(asset.id), onPreview: () => handlePreview(asset) };
+                      if (asset.content_type === "link") return <LinkCard key={asset.id} asset={asset} canDelete={canDelete} onDelete={() => handleDelete(asset.id)} />;
+                      if (asset.content_type === "note") return <NoteCard key={asset.id} asset={asset} canDelete={canDelete} onDelete={() => handleDelete(asset.id)} />;
                       return <FileCard key={asset.id} {...props} />;
                     })}
                   </div>
@@ -672,6 +700,45 @@ export default function ClientAssets() {
           canUpload={canManage}
         />
       )}
+
+      {/* Preview Modal */}
+      <Dialog open={!!previewingAsset} onOpenChange={(v) => !v && setPreviewingAsset(null)}>
+        <DialogContent className="max-w-4xl w-full p-0 overflow-hidden bg-black/95 border-none">
+          <DialogHeader className="p-4 bg-background/10 backdrop-blur-md absolute top-0 w-full z-10 border-b border-white/10">
+            <DialogTitle className="text-white text-sm font-medium">{previewingAsset?.asset_name || previewingAsset?.file_name}</DialogTitle>
+          </DialogHeader>
+          <div className="flex items-center justify-center min-h-[60vh] p-4 pt-16 pb-0">
+            {previewUrl ? (
+              isImage(previewingAsset?.file_type ?? null) ? (
+                <img src={previewUrl} alt={previewingAsset?.file_name} className="max-w-full max-h-[75vh] object-contain shadow-2xl rounded-md" />
+              ) : previewingAsset?.file_type === "application/pdf" ? (
+                <object data={previewUrl} type="application/pdf" className="w-full h-[75vh] rounded-md">
+                  <div className="flex flex-col items-center justify-center h-full gap-3 text-white/70">
+                    <p className="text-sm">Your browser cannot preview PDFs inline.</p>
+                    <a href={previewUrl} target="_blank" rel="noopener noreferrer">
+                      <button className="px-4 py-2 rounded-md bg-white/10 text-white text-sm border border-white/20 hover:bg-white/20">Open PDF</button>
+                    </a>
+                  </div>
+                </object>
+              ) : null
+            ) : (
+              <div className="flex items-center justify-center h-40">
+                <div className="h-6 w-6 animate-spin rounded-full border-2 border-white/20 border-t-white" />
+              </div>
+            )}
+          </div>
+          <div className="p-4 bg-background/10 backdrop-blur-md flex justify-end gap-2 border-t border-white/10 mt-0">
+            {previewUrl && (
+              <a href={previewUrl} target="_blank" rel="noopener noreferrer">
+                <button className="px-3 py-1.5 text-sm rounded-md bg-white/10 border border-white/20 text-white hover:bg-white/20 flex items-center gap-2">
+                  <Download className="h-4 w-4" /> Download
+                </button>
+              </a>
+            )}
+            <button onClick={() => setPreviewingAsset(null)} className="px-3 py-1.5 text-sm rounded-md bg-white/10 border border-white/20 text-white hover:bg-white/20">Close</button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

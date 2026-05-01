@@ -26,42 +26,47 @@ import NotFound from "./pages/NotFound";
 const queryClient = new QueryClient();
 
 function RoleRouter() {
-  const { role, loading } = useAuth();
+  const { user, role, loading } = useAuth();
 
   if (loading) return null;
-
-  // Client role gets a separate portal layout
-  if (role === "client") {
-    return (
-      <Routes>
-        <Route path="/auth" element={<Auth />} />
-        <Route path="/reset-password" element={<ResetPassword />} />
-        <Route
-          element={
-            <ProtectedRoute>
-              <ClientLayout />
-            </ProtectedRoute>
-          }
-        >
-          <Route path="/portal" element={<ClientPortal />} />
-          <Route path="/portal/deliverables" element={<ClientDeliverables />} />
-        </Route>
-        <Route path="/" element={<Navigate to="/portal" replace />} />
-        <Route path="/dashboard" element={<Navigate to="/portal" replace />} />
-        <Route path="*" element={<NotFound />} />
-      </Routes>
-    );
-  }
 
   return (
     <Routes>
       <Route path="/auth" element={<Auth />} />
       <Route path="/reset-password" element={<ResetPassword />} />
-      <Route path="/" element={<Navigate to="/dashboard" replace />} />
+      
+      {/* Root redirection based on role */}
+      <Route 
+        path="/" 
+        element={
+          !user ? <Navigate to="/auth" replace /> :
+          role === "client" 
+            ? <Navigate to="/portal" replace /> 
+            : <Navigate to="/dashboard" replace />
+        } 
+      />
+
+      {/* Client Portal Routes */}
       <Route
         element={
           <ProtectedRoute>
-            <AppLayout />
+            <RoleRoute allowed={["client"]}>
+              <ClientLayout />
+            </RoleRoute>
+          </ProtectedRoute>
+        }
+      >
+        <Route path="/portal" element={<ClientPortal />} />
+        <Route path="/portal/deliverables" element={<ClientDeliverables />} />
+      </Route>
+
+      {/* Admin/Internal Routes */}
+      <Route
+        element={
+          <ProtectedRoute>
+            <RoleRoute allowed={["admin", "manager", "team_member"]}>
+              <AppLayout />
+            </RoleRoute>
           </ProtectedRoute>
         }
       >
@@ -75,7 +80,9 @@ function RoleRouter() {
         <Route path="/settings" element={<RoleRoute allowed={["admin"]}><SettingsPage /></RoleRoute>} />
         <Route path="/assets" element={<RoleRoute allowed={["admin", "manager"]}><ClientAssets /></RoleRoute>} />
       </Route>
-      <Route path="*" element={<NotFound />} />
+
+      {/* Catch-all */}
+      <Route path="*" element={user ? <NotFound /> : <Navigate to="/auth" replace />} />
     </Routes>
   );
 }

@@ -7,10 +7,11 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Search, Mail, Phone, CalendarIcon, TrendingUp, Users, ArrowUpDown } from "lucide-react";
+import { Plus, Search, Mail, Phone, CalendarIcon, TrendingUp, Users, ArrowUpDown, Image } from "lucide-react";
 import { format, parseISO, subMonths, startOfMonth } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
@@ -41,7 +42,8 @@ export default function Clients() {
   const [onboardedDate, setOnboardedDate] = useState<Date | undefined>(new Date());
   const [formData, setFormData] = useState({
     name: "", contact_email: "", contact_phone: "", notes: "",
-    brand_color: "#3B82F6", contract_type: "retainer",
+    brand_color: "#3B82F6", secondary_color: "#10B981", brand_slogan: "",
+    contract_type: "retainer",
   });
   const { role, token } = useAuth();
   const { toast } = useToast();
@@ -71,12 +73,18 @@ export default function Clients() {
         contact_phone: formData.contact_phone || null,
         notes: formData.notes || null,
         brand_color: formData.brand_color,
+        secondary_color: formData.secondary_color,
+        brand_slogan: formData.brand_slogan || null,
         contract_type: formData.contract_type,
         onboarded_at: onboardedDate ? format(onboardedDate, "yyyy-MM-dd") : null,
       });
       toast({ title: "Client added" });
       setDialogOpen(false);
-      setFormData({ name: "", contact_email: "", contact_phone: "", notes: "", brand_color: "#3B82F6", contract_type: "retainer" });
+      setFormData({ 
+        name: "", contact_email: "", contact_phone: "", notes: "", 
+        brand_color: "#3B82F6", secondary_color: "#10B981", brand_slogan: "",
+        contract_type: "retainer" 
+      });
       setOnboardedDate(new Date());
       fetchClients();
     } catch (error: any) {
@@ -143,60 +151,87 @@ export default function Clients() {
               <DialogHeader>
                 <DialogTitle>Add New Client</DialogTitle>
               </DialogHeader>
-              <form onSubmit={handleCreate} className="space-y-3 mt-2">
-                <div className="space-y-1.5">
-                  <Label>Client Name *</Label>
-                  <Input value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder="Acme Corp" required />
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1.5">
-                    <Label>Contact Email</Label>
-                    <Input type="email" value={formData.contact_email} onChange={(e) => setFormData({ ...formData, contact_email: e.target.value })} placeholder="contact@acme.com" />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label>Contact Phone</Label>
-                    <Input value={formData.contact_phone} onChange={(e) => setFormData({ ...formData, contact_phone: e.target.value })} placeholder="+1 234 567 890" />
-                  </div>
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Contract Type</Label>
-                  <Select value={formData.contract_type} onValueChange={(v) => setFormData({ ...formData, contract_type: v })}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="retainer">Retainer</SelectItem>
-                      <SelectItem value="one_time">One-Time</SelectItem>
-                      <SelectItem value="project">Project</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1.5">
-                    <Label>Brand Color</Label>
-                    <div className="flex gap-2">
-                      <input type="color" value={formData.brand_color} onChange={(e) => setFormData({ ...formData, brand_color: e.target.value })} className="h-10 w-12 rounded-md border border-input cursor-pointer" />
-                      <Input value={formData.brand_color} onChange={(e) => setFormData({ ...formData, brand_color: e.target.value })} className="font-mono text-sm" />
+              <form onSubmit={handleCreate} className="mt-2">
+                <Tabs defaultValue="basic" className="space-y-4">
+                  <TabsList className="grid w-full grid-cols-2">
+                    <TabsTrigger value="basic">Basic Info</TabsTrigger>
+                    <TabsTrigger value="branding">Branding & Theme</TabsTrigger>
+                  </TabsList>
+
+                  <TabsContent value="basic" className="space-y-3">
+                    <div className="space-y-1.5">
+                      <Label>Client Name *</Label>
+                      <Input value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder="Acme Corp" required />
                     </div>
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label>Onboarded Date</Label>
-                    <Popover>
-                      <PopoverTrigger asChild>
-                        <Button variant="outline" className={cn("w-full justify-start text-left font-normal text-xs", !onboardedDate && "text-muted-foreground")}>
-                          <CalendarIcon className="mr-1.5 h-3.5 w-3.5" />
-                          {onboardedDate ? format(onboardedDate, "MMM d, yyyy") : "Pick date"}
-                        </Button>
-                      </PopoverTrigger>
-                      <PopoverContent className="w-auto p-0" align="start">
-                        <Calendar mode="single" selected={onboardedDate} onSelect={setOnboardedDate} initialFocus className="p-3 pointer-events-auto" />
-                      </PopoverContent>
-                    </Popover>
-                  </div>
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Notes</Label>
-                  <Input value={formData.notes} onChange={(e) => setFormData({ ...formData, notes: e.target.value })} placeholder="Key account details..." />
-                </div>
-                <Button type="submit" className="w-full mt-2">Add Client</Button>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <Label>Contact Email</Label>
+                        <Input type="email" value={formData.contact_email} onChange={(e) => setFormData({ ...formData, contact_email: e.target.value })} placeholder="contact@acme.com" />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label>Contact Phone</Label>
+                        <Input value={formData.contact_phone} onChange={(e) => setFormData({ ...formData, contact_phone: e.target.value })} placeholder="+1 234 567 890" />
+                      </div>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Contract Type</Label>
+                      <Select value={formData.contract_type} onValueChange={(v) => setFormData({ ...formData, contract_type: v })}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="retainer">Retainer</SelectItem>
+                          <SelectItem value="one_time">One-Time</SelectItem>
+                          <SelectItem value="project">Project</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Onboarded Date</Label>
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button variant="outline" className={cn("w-full justify-start text-left font-normal text-xs", !onboardedDate && "text-muted-foreground")}>
+                            <CalendarIcon className="mr-1.5 h-3.5 w-3.5" />
+                            {onboardedDate ? format(onboardedDate, "MMM d, yyyy") : "Pick date"}
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                          <Calendar mode="single" selected={onboardedDate} onSelect={setOnboardedDate} initialFocus className="p-3 pointer-events-auto" />
+                        </PopoverContent>
+                      </Popover>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Notes</Label>
+                      <Input value={formData.notes} onChange={(e) => setFormData({ ...formData, notes: e.target.value })} placeholder="Key account details..." />
+                    </div>
+                  </TabsContent>
+
+                  <TabsContent value="branding" className="space-y-3">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <Label>Primary Color</Label>
+                        <div className="flex gap-2">
+                          <input type="color" value={formData.brand_color} onChange={(e) => setFormData({ ...formData, brand_color: e.target.value })} className="h-10 w-12 rounded-md border border-input cursor-pointer" />
+                          <Input value={formData.brand_color} onChange={(e) => setFormData({ ...formData, brand_color: e.target.value })} className="font-mono text-[10px]" />
+                        </div>
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label>Secondary Color</Label>
+                        <div className="flex gap-2">
+                          <input type="color" value={formData.secondary_color} onChange={(e) => setFormData({ ...formData, secondary_color: e.target.value })} className="h-10 w-12 rounded-md border border-input cursor-pointer" />
+                          <Input value={formData.secondary_color} onChange={(e) => setFormData({ ...formData, secondary_color: e.target.value })} className="font-mono text-[10px]" />
+                        </div>
+                      </div>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Brand Slogan</Label>
+                      <Input value={formData.brand_slogan} onChange={(e) => setFormData({ ...formData, brand_slogan: e.target.value })} placeholder="Elevating your brand identity" />
+                    </div>
+                    <div className="p-4 rounded-xl border border-dashed border-border bg-muted/30 text-center">
+                      <Image className="mx-auto h-8 w-8 text-muted-foreground mb-2" />
+                      <p className="text-xs text-muted-foreground">Logo can be uploaded in the client detail view after creation.</p>
+                    </div>
+                  </TabsContent>
+                </Tabs>
+                <Button type="submit" className="w-full mt-6 shadow-lg shadow-primary/20">Add Client</Button>
               </form>
             </DialogContent>
           </Dialog>

@@ -66,6 +66,8 @@ class ClientController extends Controller
             'contact_email' => ['sometimes', 'nullable', 'email'],
             'contact_phone' => ['sometimes', 'nullable', 'string', 'max:40'],
             'brand_color' => ['sometimes', 'nullable', 'string', 'max:24'],
+            'secondary_color' => ['sometimes', 'nullable', 'string', 'max:24'],
+            'brand_slogan' => ['sometimes', 'nullable', 'string', 'max:255'],
             'logo_url' => ['sometimes', 'nullable', 'string', 'max:2048'],
             'notes' => ['sometimes', 'nullable', 'string'],
             'is_active' => ['sometimes', 'boolean'],

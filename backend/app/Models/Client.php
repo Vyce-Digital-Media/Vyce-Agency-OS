@@ -14,6 +14,8 @@ class Client extends Model
         'contact_email',
         'contact_phone',
         'brand_color',
+        'secondary_color',
+        'brand_slogan',
         'logo_url',
         'notes',
         'is_active',
@@ -38,6 +40,11 @@ class Client extends Model
     public function plans()
     {
         return $this->hasMany(MonthlyPlan::class);
+    }
+
+    public function brandKits()
+    {
+        return $this->hasMany(BrandKit::class);
     }
 
     public function assets()

@@ -18,6 +18,7 @@ class Deliverable extends Model
         'assigned_to',
         'description',
         'priority',
+        'estimated_minutes',
         'approved_by',
         'approved_at',
     ];
@@ -38,6 +39,11 @@ class Deliverable extends Model
     public function assignedUser()
     {
         return $this->belongsTo(User::class, 'assigned_to');
+    }
+
+    public function comments()
+    {
+        return $this->hasMany(DeliverableComment::class)->orderBy('created_at', 'asc');
     }
 
     public function assets()

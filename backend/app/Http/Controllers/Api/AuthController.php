@@ -27,15 +27,47 @@ class AuthController extends Controller
             return response()->json(['message' => 'Invalid credentials'], 422);
         }
 
+        $payload = $this->userPayload($user);
+
         return response()->json([
-            'token' => $user->createToken('web')->plainTextToken,
-            'user' => $this->userPayload($user),
+            'token'   => $user->createToken('web')->plainTextToken,
+            'user'    => $payload['user'],
+            'profile' => $payload['profile'],
+            'role'    => $payload['role'],
         ]);
     }
 
     public function me(Request $request)
     {
-        return response()->json($this->userPayload($request->user()));
+        $payload = $this->userPayload($request->user());
+
+        return response()->json([
+            'user'    => $payload['user'],
+            'profile' => $payload['profile'],
+            'role'    => $payload['role'],
+        ]);
+    }
+
+    public function updateProfile(Request $request)
+    {
+        $data = $request->validate([
+            'full_name'      => ['sometimes', 'string', 'max:255'],
+            'internal_label' => ['sometimes', 'nullable', 'string', 'max:255'],
+            'avatar_url'     => ['sometimes', 'nullable', 'string', 'max:2048'],
+        ]);
+
+        $profile = $request->user()->profile;
+        if ($profile) {
+            $profile->update($data);
+        }
+
+        $payload = $this->userPayload($request->user()->fresh());
+
+        return response()->json([
+            'user'    => $payload['user'],
+            'profile' => $payload['profile'],
+            'role'    => $payload['role'],
+        ]);
     }
 
     public function logout(Request $request)

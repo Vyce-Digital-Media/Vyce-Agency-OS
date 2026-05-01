@@ -5,6 +5,9 @@ import { useToast } from "@/hooks/use-toast";
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle,
 } from "@/components/ui/sheet";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -17,8 +20,9 @@ import { Badge } from "@/components/ui/badge";
 import AssetUploader from "@/components/AssetUploader";
 import {
   CheckCircle, Clock, AlertTriangle, Paperclip, Calendar, User,
-  Download, Trash2, ThumbsUp, Flag,
+  Download, Trash2, ThumbsUp, Flag, Image, MessageSquare, Send
 } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 interface Profile { user_id: string; full_name: string; internal_label: string | null }
 interface DeliverableAsset {
@@ -31,7 +35,17 @@ export interface DeliverableForSheet {
   status: string; due_date: string | null; assigned_to: string | null;
   plan_id: string; priority: string;
   approved_by: string | null; approved_at: string | null;
+  estimated_minutes: number | null;
   monthly_plans: { month: number; year: number; clients: { name: string; brand_color: string } | null } | null;
+}
+
+interface Comment {
+  id: string;
+  deliverable_id: string;
+  user_id: string;
+  body: string;
+  created_at: string;
+  user: { profile: Profile };
 }
 
 interface Props {
@@ -79,9 +93,15 @@ export default function DeliverableDetailSheet({ deliverable, open, onClose, onR
   const { toast } = useToast();
   const [description, setDescription] = useState("");
   const [assets, setAssets] = useState<DeliverableAsset[]>([]);
+  const [signedUrls, setSignedUrls] = useState<Record<string, string>>({});
+  const [previewAsset, setPreviewAsset] = useState<DeliverableAsset | null>(null);
   const [loadingAssets, setLoadingAssets] = useState(false);
   const [saving, setSaving] = useState(false);
   const [approving, setApproving] = useState(false);
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [newComment, setNewComment] = useState("");
+  const [loadingComments, setLoadingComments] = useState(false);
+  const [estimatedMinutes, setEstimatedMinutes] = useState<string>("");
 
   const isOwner = deliverable?.assigned_to === user?.id;
   const canEdit = canManage || isOwner;
@@ -90,7 +110,9 @@ export default function DeliverableDetailSheet({ deliverable, open, onClose, onR
   useEffect(() => {
     if (deliverable) {
       setDescription(deliverable.description || "");
+      setEstimatedMinutes(deliverable.estimated_minutes?.toString() || "");
       fetchAssets(deliverable.id);
+      fetchComments(deliverable.id);
     }
   }, [deliverable?.id]);
 
@@ -98,19 +120,70 @@ export default function DeliverableDetailSheet({ deliverable, open, onClose, onR
     setLoadingAssets(true);
     const { data } = await backend
       .from("deliverable_assets").select("*").eq("deliverable_id", id).order("created_at", { ascending: false });
-    if (data) setAssets(data as DeliverableAsset[]);
+    
+    if (data) {
+      const assetList = data as DeliverableAsset[];
+      setAssets(assetList);
+      
+      // Fetch signed URLs for previews
+      assetList.forEach(async (asset) => {
+        if (asset.file_type?.startsWith("image/")) {
+          const { data: signedData } = await backend.storage
+            .from("deliverable-assets")
+            .createSignedUrl(asset.id);
+          if (signedData?.signedUrl) {
+            setSignedUrls(prev => ({ ...prev, [asset.id]: signedData.signedUrl }));
+          }
+        }
+      });
+    }
     setLoadingAssets(false);
   };
 
-  const handleSaveDescription = async () => {
+  const fetchComments = async (id: string) => {
+    setLoadingComments(true);
+    const { data } = await backend.from("deliverable_comments" as any).select("*, user:users(id, profile:profiles(*))").eq("deliverable_id", id).order("created_at", { ascending: true });
+    if (data) setComments(data as any[]);
+    setLoadingComments(false);
+  };
+
+  const handlePostComment = async () => {
+    if (!newComment.trim() || !deliverable) return;
+    const { data, error } = await backend.from("deliverable_comments" as any).insert({
+      deliverable_id: deliverable.id,
+      user_id: user?.id,
+      body: newComment.trim(),
+    }).select("*, user:users(id, profile:profiles(*))").single();
+    
+    if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
+    else {
+      setComments(prev => [...prev, data as any]);
+      setNewComment("");
+    }
+  };
+
+  const handleDeleteComment = async (id: string) => {
+    const { error } = await backend.from("deliverable_comments" as any).delete().eq("id", id);
+    if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
+    else setComments(prev => prev.filter(c => c.id !== id));
+  };
+
+  const handleSaveMetadata = async () => {
     if (!deliverable) return;
     setSaving(true);
     const { error } = await backend.from("deliverables")
-      .update({ description })
+      .update({ 
+        description,
+        estimated_minutes: estimatedMinutes ? parseInt(estimatedMinutes) : null 
+      })
       .eq("id", deliverable.id);
-    setSaving(false);
+    setSaving(true);
     if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
-    else { toast({ title: "Description saved" }); onRefresh(); }
+    else { 
+      toast({ title: "Updated successfully" }); 
+      onRefresh(); 
+    }
+    setSaving(false);
   };
 
   const handleStatusChange = async (newStatus: string) => {
@@ -266,6 +339,9 @@ export default function DeliverableDetailSheet({ deliverable, open, onClose, onR
               <TabsTrigger value="attachments" className="flex-1">
                 Attachments {assets.length > 0 && `(${assets.length})`}
               </TabsTrigger>
+              <TabsTrigger value="comments" className="flex-1">
+                Comments {comments.length > 0 && `(${comments.length})`}
+              </TabsTrigger>
             </TabsList>
           </div>
 
@@ -364,6 +440,24 @@ export default function DeliverableDetailSheet({ deliverable, open, onClose, onR
                   <span className="text-sm">{assignee?.full_name || "Unassigned"}</span>
                 )}
               </div>
+
+              {/* Estimated Time */}
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground flex items-center gap-1.5">
+                  <Clock className="h-3 w-3" /> Est. Minutes
+                </Label>
+                {canManage ? (
+                  <Input
+                    type="number"
+                    className="h-8 text-xs"
+                    placeholder="e.g. 60"
+                    value={estimatedMinutes}
+                    onChange={(e) => setEstimatedMinutes(e.target.value)}
+                  />
+                ) : (
+                  <span className="text-sm">{deliverable.estimated_minutes ? `${deliverable.estimated_minutes}m` : "Not set"}</span>
+                )}
+              </div>
             </div>
 
             {/* Description */}
@@ -380,11 +474,11 @@ export default function DeliverableDetailSheet({ deliverable, open, onClose, onR
                   />
                   <Button
                     size="sm"
-                    onClick={handleSaveDescription}
-                    disabled={saving || description === (deliverable.description || "")}
+                    onClick={handleSaveMetadata}
+                    disabled={saving || (description === (deliverable.description || "") && estimatedMinutes === (deliverable.estimated_minutes?.toString() || ""))}
                     className="w-full"
                   >
-                    {saving ? "Saving..." : "Save Description"}
+                    {saving ? "Saving..." : "Save Details"}
                   </Button>
                 </div>
               ) : (
@@ -426,8 +520,18 @@ export default function DeliverableDetailSheet({ deliverable, open, onClose, onR
                   return (
                     <div key={asset.id} className="flex items-center justify-between gap-3 p-3 rounded-lg border bg-card hover:bg-muted/30 transition-colors">
                       <div className="flex items-center gap-3 min-w-0">
-                        <div className="h-8 w-8 rounded-md bg-primary/10 flex items-center justify-center shrink-0">
-                          <Paperclip className="h-3.5 w-3.5 text-primary" />
+                        <div 
+                          className={cn(
+                            "h-10 w-10 rounded-md bg-primary/10 flex items-center justify-center shrink-0 overflow-hidden",
+                            (asset.file_type?.startsWith("image/") || asset.file_type === "application/pdf") && "cursor-pointer hover:ring-2 ring-primary/50 transition-all"
+                          )}
+                          onClick={() => (asset.file_type?.startsWith("image/") || asset.file_type === "application/pdf") && setPreviewAsset(asset)}
+                        >
+                          {asset.file_type?.startsWith("image/") && signedUrls[asset.id] ? (
+                            <img src={signedUrls[asset.id]} alt="" className="h-full w-full object-cover" />
+                          ) : (
+                            <Paperclip className="h-4 w-4 text-primary" />
+                          )}
                         </div>
                         <div className="min-w-0">
                           <p className="text-sm font-medium truncate">{asset.file_name}</p>
@@ -438,7 +542,12 @@ export default function DeliverableDetailSheet({ deliverable, open, onClose, onR
                         </div>
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
-                        <a href={asset.file_url} target="_blank" rel="noopener noreferrer">
+                        {(asset.file_type?.startsWith("image/") || asset.file_type === "application/pdf") && (
+                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setPreviewAsset(asset)}>
+                            <Image className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+                        <a href={signedUrls[asset.id] || asset.file_url} target="_blank" rel="noopener noreferrer">
                           <Button variant="ghost" size="icon" className="h-7 w-7">
                             <Download className="h-3.5 w-3.5" />
                           </Button>
@@ -458,8 +567,143 @@ export default function DeliverableDetailSheet({ deliverable, open, onClose, onR
               </div>
             )}
           </TabsContent>
+
+          {/* COMMENTS TAB */}
+          <TabsContent value="comments" className="px-6 pb-6 mt-4 flex flex-col h-[50vh]">
+            <div className="flex-1 overflow-y-auto space-y-4 mb-4 pr-2 custom-scrollbar">
+              {loadingComments ? (
+                <div className="space-y-4">
+                  {[1,2,3].map(i => (
+                    <div key={i} className="flex gap-3 animate-pulse">
+                      <div className="h-8 w-8 rounded-full bg-muted shrink-0" />
+                      <div className="flex-1 space-y-2">
+                        <div className="h-3 w-24 bg-muted rounded" />
+                        <div className="h-12 w-full bg-muted rounded" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : comments.length === 0 ? (
+                <div className="text-center py-12 text-muted-foreground">
+                  <MessageSquare className="h-8 w-8 mx-auto mb-2 opacity-40" />
+                  <p className="text-sm">No comments yet. Start the conversation!</p>
+                </div>
+              ) : (
+                comments.map(comment => {
+                  const isMe = comment.user_id === user?.id;
+                  return (
+                    <div key={comment.id} className={cn("flex gap-3", isMe && "flex-row-reverse")}>
+                      <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0 text-[10px] font-bold border border-primary/20">
+                        {comment.user?.profile?.full_name?.split(" ").map(n => n[0]).join("") || "?"}
+                      </div>
+                      <div className={cn("flex flex-col max-w-[85%]", isMe && "items-end")}>
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-[11px] font-bold">{comment.user?.profile?.full_name}</span>
+                          <span className="text-[10px] text-muted-foreground">{new Date(comment.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                        </div>
+                        <div className={cn(
+                          "px-3 py-2 rounded-2xl text-sm",
+                          isMe ? "bg-primary text-primary-foreground rounded-tr-none" : "bg-muted rounded-tl-none"
+                        )}>
+                          {comment.body}
+                        </div>
+                        {isMe && (
+                          <button 
+                            onClick={() => handleDeleteComment(comment.id)}
+                            className="text-[10px] text-muted-foreground hover:text-destructive mt-1 transition-colors"
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Input area */}
+            <div className="pt-4 border-t sticky bottom-0 bg-background">
+              <div className="flex gap-2">
+                <Textarea 
+                  value={newComment}
+                  onChange={(e) => setNewComment(e.target.value)}
+                  placeholder="Type a message..."
+                  className="min-h-[40px] max-h-[120px] resize-none text-sm py-2 px-3 rounded-xl focus-visible:ring-primary"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      handlePostComment();
+                    }
+                  }}
+                />
+                <Button 
+                  size="icon" 
+                  className="shrink-0 rounded-full h-10 w-10 shadow-lg"
+                  disabled={!newComment.trim()}
+                  onClick={handlePostComment}
+                >
+                  <Send className="h-4 w-4" />
+                </Button>
+              </div>
+              <p className="text-[10px] text-muted-foreground mt-2 px-1">Press Enter to send, Shift+Enter for new line.</p>
+            </div>
+          </TabsContent>
         </Tabs>
       </SheetContent>
+
+      <Dialog open={!!previewAsset} onOpenChange={(v) => !v && setPreviewAsset(null)}>
+        <DialogContent className="max-w-4xl w-full p-0 overflow-hidden bg-black/95 border-none">
+          <DialogHeader className="p-4 bg-background/10 backdrop-blur-md absolute top-0 w-full z-10 border-b border-white/10">
+            <DialogTitle className="text-white text-sm font-medium">{previewAsset?.file_name}</DialogTitle>
+          </DialogHeader>
+          <div className="flex items-center justify-center min-h-[60vh] p-4 pt-16 pb-0">
+            {previewAsset && signedUrls[previewAsset.id] ? (
+              previewAsset.file_type?.startsWith("image/") ? (
+                <img
+                  src={signedUrls[previewAsset.id]}
+                  alt={previewAsset.file_name}
+                  className="max-w-full max-h-[75vh] object-contain shadow-2xl rounded-md"
+                />
+              ) : previewAsset.file_type === "application/pdf" ? (
+                <object
+                  data={signedUrls[previewAsset.id]}
+                  type="application/pdf"
+                  className="w-full h-[75vh] rounded-md"
+                >
+                  <div className="flex flex-col items-center justify-center h-full gap-3 text-white/70">
+                    <p className="text-sm">Your browser cannot preview PDFs inline.</p>
+                    <a href={signedUrls[previewAsset.id]} target="_blank" rel="noopener noreferrer">
+                      <Button size="sm" variant="outline" className="bg-white/10 border-white/20 text-white hover:bg-white/20">
+                        <Download className="h-4 w-4 mr-2" /> Open PDF
+                      </Button>
+                    </a>
+                  </div>
+                </object>
+              ) : (
+                <div className="flex flex-col items-center justify-center h-40 gap-3 text-white/70">
+                  <Paperclip className="h-10 w-10 opacity-50" />
+                  <p className="text-sm">Preview not available for this file type.</p>
+                </div>
+              )
+            ) : (
+              <div className="flex items-center justify-center h-40">
+                <div className="h-6 w-6 animate-spin rounded-full border-2 border-white/20 border-t-white" />
+              </div>
+            )}
+          </div>
+          <div className="p-4 bg-background/10 backdrop-blur-md flex justify-end gap-2 border-t border-white/10 mt-0">
+            <a href={previewAsset ? (signedUrls[previewAsset.id] || previewAsset.file_url) : "#"} target="_blank" rel="noopener noreferrer">
+              <Button size="sm" variant="outline" className="bg-white/10 border-white/20 text-white hover:bg-white/20">
+                <Download className="h-4 w-4 mr-2" /> Download
+              </Button>
+            </a>
+            <Button size="sm" variant="outline" onClick={() => setPreviewAsset(null)} className="bg-white/10 border-white/20 text-white hover:bg-white/20">
+              Close
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </Sheet>
   );
 }

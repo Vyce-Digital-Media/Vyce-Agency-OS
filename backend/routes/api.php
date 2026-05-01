@@ -3,8 +3,10 @@
 use App\Http\Controllers\Api\AssetController;
 use App\Http\Controllers\Api\AttendanceController;
 use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\BrandKitController;
 use App\Http\Controllers\Api\ClientController;
 use App\Http\Controllers\Api\ClientPortalController;
+use App\Http\Controllers\Api\CommentController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\DeliverableController;
 use App\Http\Controllers\Api\NotificationController;
@@ -27,12 +29,20 @@ Route::prefix('auth')->group(function () {
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/auth/me', [AuthController::class, 'me']);
+    Route::patch('/auth/profile', [AuthController::class, 'updateProfile']);
     Route::post('/auth/logout', [AuthController::class, 'logout']);
 
     Route::get('/dashboard', [DashboardController::class, 'index']);
     Route::apiResource('clients', ClientController::class);
+    Route::get('/clients/{client}/brand-kits', [BrandKitController::class, 'index']);
+    Route::post('/clients/{client}/brand-kits', [BrandKitController::class, 'store']);
+    Route::delete('/brand-kits/{brandKit}', [BrandKitController::class, 'destroy']);
+
     Route::apiResource('plans', PlanController::class);
     Route::apiResource('deliverables', DeliverableController::class);
+    Route::get('/deliverables/{deliverable}/comments', [CommentController::class, 'index']);
+    Route::post('/deliverables/{deliverable}/comments', [CommentController::class, 'store']);
+    Route::delete('/comments/{comment}', [CommentController::class, 'destroy']);
 
     Route::get('/team', [TeamController::class, 'index']);
     Route::post('/team/invite', [TeamController::class, 'invite']);
@@ -42,6 +52,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/team/salaries', [TeamController::class, 'salaries']);
 
     Route::get('/attendance', [AttendanceController::class, 'index']);
+    Route::post('/attendance', [AttendanceController::class, 'store']);
     Route::post('/attendance/clock-in', [AttendanceController::class, 'clockIn']);
     Route::post('/attendance/clock-out', [AttendanceController::class, 'clockOut']);
     Route::post('/attendance/break-start', [AttendanceController::class, 'breakStart']);
@@ -52,12 +63,21 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::patch('/notifications/{notification}/read', [NotificationController::class, 'markRead']);
     Route::patch('/notifications/read-all', [NotificationController::class, 'markAllRead']);
 
-    Route::post('/assets/{bucket}/{folder}', [AssetController::class, 'store'])
+    Route::post('/assets/{bucket}/{path}', [AssetController::class, 'store'])
+        ->where('path', '.*')
         ->whereIn('bucket', ['client-assets', 'deliverable-assets']);
     Route::get('/assets/{bucket}/{asset}/signed-url', [AssetController::class, 'signedUrl'])
         ->whereIn('bucket', ['client-assets', 'deliverable-assets']);
     Route::delete('/assets/{bucket}/{asset}', [AssetController::class, 'destroy'])
         ->whereIn('bucket', ['client-assets', 'deliverable-assets']);
+
+    Route::get('/deliverable_assets', [AssetController::class, 'indexDeliverableAssets']);
+    Route::post('/deliverable_assets', [AssetController::class, 'storeDeliverableAsset']);
+    Route::delete('/deliverable_assets', [AssetController::class, 'destroyDeliverableAsset']);
+
+    Route::get('/client_assets', [AssetController::class, 'indexClientAssets']);
+    Route::post('/client_assets', [AssetController::class, 'storeClientAsset']);
+    Route::delete('/client_assets', [AssetController::class, 'destroyClientAsset']);
 
     Route::get('/portal', [ClientPortalController::class, 'dashboard']);
     Route::get('/portal/deliverables', [ClientPortalController::class, 'deliverables']);

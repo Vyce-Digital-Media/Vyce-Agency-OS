@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Users, Clock, Plus, Trash2 } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -22,6 +23,7 @@ interface TeamMember {
   deliverableCount?: number;
   expected_start_time?: string | null;
   salary_hourly?: number | null;
+  totalEstimatedMinutes?: number;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -206,10 +208,22 @@ export default function Team() {
                       {m.deliverableCount! > 0 && (
                         <>
                           {m.internal_label && <span>·</span>}
-                          <span>{m.deliverableCount} active task{m.deliverableCount !== 1 ? "s" : ""}</span>
+                          <span>{m.deliverableCount} tasks ({Math.round((m.totalEstimatedMinutes || 0) / 60)}h)</span>
                         </>
                       )}
                     </div>
+                    {/* Workload Bar */}
+                    {m.deliverableCount! > 0 && (
+                      <div className="mt-2 w-32 h-1 bg-muted rounded-full overflow-hidden">
+                        <div 
+                          className={cn(
+                            "h-full rounded-full transition-all duration-500",
+                            (m.totalEstimatedMinutes || 0) > 2400 ? "bg-destructive" : (m.totalEstimatedMinutes || 0) > 1800 ? "bg-warning" : "bg-primary"
+                          )}
+                          style={{ width: `${Math.min(100, ((m.totalEstimatedMinutes || 0) / 2400) * 100)}%` }}
+                        />
+                      </div>
+                    )}
                   </div>
                 </div>
 

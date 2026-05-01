@@ -10,8 +10,8 @@ const tableEndpoints: Record<string, string> = {
   notifications: "/notifications",
   profiles: "/team",
   user_roles: "/team",
-  client_assets: "/assets/client-assets",
-  deliverable_assets: "/assets/deliverable-assets",
+  client_assets: "/client_assets",
+  deliverable_assets: "/deliverable_assets",
 };
 
 const getToken = () => localStorage.getItem(TOKEN_KEY);
@@ -48,6 +48,21 @@ class LocalQuery {
 
   in(column: string, value: unknown[]) {
     this.filters[column] = value;
+    return this;
+  }
+
+  is(column: string, value: unknown) {
+    this.filters[`is_${column}`] = value;
+    return this;
+  }
+
+  gte(column: string, value: unknown) {
+    this.filters[`gte_${column}`] = value;
+    return this;
+  }
+
+  lte(column: string, value: unknown) {
+    this.filters[`lte_${column}`] = value;
     return this;
   }
 
@@ -101,7 +116,8 @@ class LocalQuery {
       Object.entries(this.filters).forEach(([key, value]) => {
         if (key === "id" && id) return;
         if (Array.isArray(value)) search.set(key, value.join(","));
-        else if (value !== undefined && value !== null) search.set(key, String(value));
+        else if (value === null) search.set(key, "null");
+        else if (value !== undefined) search.set(key, String(value));
       });
       if (this.orderBy) search.set("order", `${this.orderBy.column}:${this.orderBy.ascending === false ? "desc" : "asc"}`);
       if (this.limitValue) search.set("limit", String(this.limitValue));
@@ -114,11 +130,17 @@ class LocalQuery {
       }
 
       if (this.action === "update") {
-        return { data: normalizeData(await apiRequest(path, { method: "PATCH", body: JSON.stringify(this.body), token })), error: null };
+        const updatePath = this.table === "profiles" ? "/auth/profile" : path;
+        return { data: normalizeData(await apiRequest(updatePath, { method: "PATCH", body: JSON.stringify(this.body), token })), error: null };
       }
 
       if (this.action === "delete") {
-        return { data: normalizeData(await apiRequest(path, { method: "DELETE", token })), error: null };
+        // Asset tables use query params for id, not path segments
+        const assetTables = ["deliverable_assets", "client_assets"];
+        const deletePath = assetTables.includes(this.table)
+          ? `${baseEndpoint}?id=${this.filters.id}`
+          : path;
+        return { data: normalizeData(await apiRequest(deletePath, { method: "DELETE", token })), error: null };
       }
 
       return { data: normalizeData(await apiRequest(path, { method: "GET", token })), error: null };
@@ -129,6 +151,7 @@ class LocalQuery {
 }
 
 export const backend = {
+  get: (path: string) => apiRequest(path, { method: "GET", token: getToken() }),
   from: (table: string) => new LocalQuery(table),
   rpc: (name: string) => {
     if (name === "get_team_directory") {

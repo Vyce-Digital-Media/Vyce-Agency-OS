@@ -73,6 +73,11 @@ interface DashTimeEntry {
   is_break: boolean;
 }
 
+interface Analytics {
+  total_estimated_hours: number;
+  total_actual_hours: number;
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function DashElapsedTimer({ clockIn }: { clockIn: string }) {
@@ -289,6 +294,7 @@ export default function Dashboard() {
   const [plans, setPlans] = useState<Plan[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [analytics, setAnalytics] = useState<Analytics | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedDeliverable, setSelectedDeliverable] = useState<DeliverableForSheet | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -310,16 +316,18 @@ export default function Dashboard() {
 
   useEffect(() => {
     const fetchAll = async () => {
-      const [clientsRes, plansRes, deliverablesRes, profilesRes] = await Promise.all([
+      const [clientsRes, plansRes, deliverablesRes, profilesRes, dashRes] = await Promise.all([
         backend.from("clients").select("id, name, brand_color, is_active").eq("is_active", true),
         backend.from("monthly_plans").select("id, client_id, plan_type, status, start_date, end_date, total_deliverables, month, year, clients(name, brand_color)"),
         backend.from("deliverables").select("*, monthly_plans(month, year, client_id, clients(name, brand_color))"),
         backend.rpc("get_team_directory" as any),
+        backend.get("/dashboard"),
       ]);
       setClients((clientsRes.data as Client[]) || []);
       setPlans((plansRes.data as unknown as Plan[]) || []);
       setDeliverables((deliverablesRes.data as unknown as Deliverable[]) || []);
       setProfiles((profilesRes.data as Profile[]) || []);
+      if (dashRes?.analytics) setAnalytics(dashRes.analytics as Analytics);
       setLoading(false);
     };
     fetchAll();
@@ -854,20 +862,20 @@ export default function Dashboard() {
           onClick={() => navigate("/clients")}
         />
         <KpiCard
-          label="Active Plans"
-          value={activePlans.length}
-          icon={CalendarRange}
+          label="Agency Capacity"
+          value={`${analytics?.total_estimated_hours || 0}h`}
+          icon={Zap}
           color="text-info"
-          subLabel="Running campaigns"
-          onClick={() => navigate("/plans")}
+          subLabel="Total estimated work"
         />
         <KpiCard
-          label="Needs Approval"
-          value={needsApproval.length}
-          icon={Star}
+          label="Efficiency"
+          value={analytics?.total_actual_hours && analytics?.total_estimated_hours 
+            ? `${Math.round((analytics.total_actual_hours / analytics.total_estimated_hours) * 100)}%` 
+            : "0%"}
+          icon={Target}
           color="text-accent"
-          subLabel="Awaiting sign-off"
-          onClick={() => navigate("/deliverables")}
+          subLabel="Actual vs Estimated"
         />
         <KpiCard
           label="Overdue"

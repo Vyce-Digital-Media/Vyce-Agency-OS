@@ -24,7 +24,7 @@ export default function Auth() {
     setLoading(true);
     try {
       await signIn(email, password);
-      navigate("/dashboard");
+      navigate("/");
     } catch (error: any) {
       toast({ title: "Sign in failed", description: error.message, variant: "destructive" });
     } finally {

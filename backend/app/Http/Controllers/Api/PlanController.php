@@ -17,7 +17,14 @@ class PlanController extends Controller
             $query->whereHas('client', fn ($q) => $q->where('user_id', $request->user()->id));
         }
 
-        return response()->json(['data' => $query->get()]);
+        $plans = $query->get()->map(function ($plan) {
+            $arr = $plan->toArray();
+            $arr['clients'] = $arr['client'] ?? null;
+            unset($arr['client']);
+            return $arr;
+        });
+
+        return response()->json(['data' => $plans]);
     }
 
     public function store(Request $request)

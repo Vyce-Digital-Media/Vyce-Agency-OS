@@ -6,6 +6,8 @@ export interface Client {
   contact_email: string | null;
   contact_phone: string | null;
   brand_color: string | null;
+  secondary_color: string | null;
+  brand_slogan: string | null;
   is_active: boolean;
   notes: string | null;
   created_at: string;

@@ -37,10 +37,11 @@ const CATEGORY_LABELS: Record<string, string> = {
  * - Legacy rows store the full public CDN URL → return as-is (backward compat)
  * - New rows store only the file path → generate a 1-hour signed URL
  */
-async function resolveSignedUrl(bucket: string, fileUrl: string): Promise<string> {
+async function resolveSignedUrl(bucket: string, assetId: string, fileUrl: string): Promise<string> {
   if (!fileUrl) return "";
   if (fileUrl.startsWith("http")) return fileUrl; // legacy public URL
-  const { data } = await backend.storage.from(bucket).createSignedUrl(fileUrl, 3600);
+  if (!assetId) return "";
+  const { data } = await backend.storage.from(bucket).createSignedUrl(assetId);
   return data?.signedUrl ?? "";
 }
 
@@ -62,7 +63,7 @@ export default function AssetUploader({
 
     Promise.all(
       pathAssets.map(async (a) => {
-        const url = await resolveSignedUrl(bucket, a.file_url);
+        const url = await resolveSignedUrl(bucket, a.id, a.file_url);
         return [a.id, url] as [string, string];
       })
     ).then((entries) => {

@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useAuth } from "@/contexts/AuthContext";
+import { backend } from "@/integrations/backend/client";
 import { assetsApi } from "@/api/assets";
 import { clientsApi } from "@/api/clients";
 import { useToast } from "@/hooks/use-toast";
@@ -15,7 +16,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { format } from "date-fns";
-import { CalendarIcon, Trash2, Save, FileText, Image, Building2 } from "lucide-react";
+import { CalendarIcon, Trash2, Save, FileText, Image, Building2, Palette } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface Client {
@@ -24,6 +25,8 @@ interface Client {
   contact_email: string | null;
   contact_phone: string | null;
   brand_color: string | null;
+  secondary_color: string | null;
+  brand_slogan: string | null;
   is_active: boolean;
   notes: string | null;
   created_at: string;
@@ -75,15 +78,19 @@ export default function ClientDetailSheet({ client, open, onOpenChange, onUpdate
     contact_phone: "",
     notes: "",
     brand_color: "#3B82F6",
+    secondary_color: "#10B981",
+    brand_slogan: "",
     is_active: true,
     contract_type: "retainer",
     onboarded_at: undefined as Date | undefined,
+    logo_url: "",
   });
   const [saving, setSaving] = useState(false);
   const [deliverables, setDeliverables] = useState<Deliverable[]>([]);
   const [assets, setAssets] = useState<ClientAsset[]>([]);
   const [assetSignedUrls, setAssetSignedUrls] = useState<Record<string, string>>({});
   const [loadingExtras, setLoadingExtras] = useState(false);
+  const [uploadingLogo, setUploadingLogo] = useState(false);
 
   useEffect(() => {
     if (client) {
@@ -93,9 +100,12 @@ export default function ClientDetailSheet({ client, open, onOpenChange, onUpdate
         contact_phone: client.contact_phone ?? "",
         notes: client.notes ?? "",
         brand_color: client.brand_color ?? "#3B82F6",
+        secondary_color: client.secondary_color ?? "#10B981",
+        brand_slogan: client.brand_slogan ?? "",
         is_active: client.is_active,
         contract_type: client.contract_type ?? "retainer",
         onboarded_at: client.onboarded_at ? new Date(client.onboarded_at) : undefined,
+        logo_url: client.logo_url ?? "",
       });
       fetchExtras(client.id);
     }
@@ -138,6 +148,27 @@ export default function ClientDetailSheet({ client, open, onOpenChange, onUpdate
     }
   };
 
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !client || !token) return;
+    setUploadingLogo(true);
+    try {
+      const filePath = `logos/${client.id}/${Date.now()}_${file.name}`;
+      await backend.storage.from("client-assets").upload(filePath, file);
+      
+      // Update logo_url immediately with the bucket prefix
+      const dbPath = `client-assets/${filePath}`;
+      await clientsApi.update(token, client.id, { logo_url: dbPath });
+      setForm(prev => ({ ...prev, logo_url: dbPath }));
+      toast({ title: "Logo updated successfully" });
+      onUpdated();
+    } catch (error: any) {
+      toast({ title: "Logo upload failed", description: error.message, variant: "destructive" });
+    } finally {
+      setUploadingLogo(false);
+    }
+  };
+
   const handleSave = async () => {
     if (!client || !token) return;
     setSaving(true);
@@ -148,6 +179,8 @@ export default function ClientDetailSheet({ client, open, onOpenChange, onUpdate
         contact_phone: form.contact_phone || null,
         notes: form.notes || null,
         brand_color: form.brand_color,
+        secondary_color: form.secondary_color,
+        brand_slogan: form.brand_slogan || null,
         is_active: form.is_active,
         contract_type: form.contract_type,
         onboarded_at: form.onboarded_at ? format(form.onboarded_at, "yyyy-MM-dd") : null,
@@ -205,9 +238,10 @@ export default function ClientDetailSheet({ client, open, onOpenChange, onUpdate
 
         <Tabs defaultValue="overview">
           <TabsList className="w-full mb-4">
-            <TabsTrigger value="overview" className="flex-1"><Building2 className="h-3.5 w-3.5 mr-1.5" />Overview</TabsTrigger>
-            <TabsTrigger value="deliverables" className="flex-1"><FileText className="h-3.5 w-3.5 mr-1.5" />Deliverables ({deliverables.length})</TabsTrigger>
-            <TabsTrigger value="assets" className="flex-1"><Image className="h-3.5 w-3.5 mr-1.5" />Assets ({assets.length})</TabsTrigger>
+            <TabsTrigger value="overview" className="flex-1"><Building2 className="h-3.5 w-3.5 mr-1.5" />Info</TabsTrigger>
+            <TabsTrigger value="branding" className="flex-1"><Palette className="h-3.5 w-3.5 mr-1.5" />Branding</TabsTrigger>
+            <TabsTrigger value="deliverables" className="flex-1 text-[10px]"><FileText className="h-3 w-3 mr-1" />Tasks</TabsTrigger>
+            <TabsTrigger value="assets" className="flex-1 text-[10px]"><Image className="h-3 w-3 mr-1" />Files</TabsTrigger>
           </TabsList>
 
           {/* Overview Tab */}
@@ -251,13 +285,6 @@ export default function ClientDetailSheet({ client, open, onOpenChange, onUpdate
                 </Popover>
               </div>
               <div className="space-y-1.5">
-                <Label>Brand Color</Label>
-                <div className="flex items-center gap-2">
-                  <input type="color" value={form.brand_color} onChange={(e) => setForm({ ...form, brand_color: e.target.value })} disabled={!canManage} className="h-10 w-16 rounded-md border border-input cursor-pointer disabled:opacity-50" />
-                  <Input value={form.brand_color} onChange={(e) => setForm({ ...form, brand_color: e.target.value })} disabled={!canManage} className="font-mono text-sm" />
-                </div>
-              </div>
-              <div className="space-y-1.5">
                 <Label>Status</Label>
                 <div className="flex items-center gap-2 h-10">
                   <Switch checked={form.is_active} onCheckedChange={(v) => setForm({ ...form, is_active: v })} disabled={!canManage} />
@@ -269,28 +296,84 @@ export default function ClientDetailSheet({ client, open, onOpenChange, onUpdate
                 <Input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} disabled={!canManage} placeholder="Key account details..." />
               </div>
             </div>
+            {canManage && (
+              <div className="flex items-center justify-end pt-2 border-t border-border">
+                <Button onClick={handleSave} disabled={saving} size="sm">
+                  <Save className="h-4 w-4 mr-1.5" />{saving ? "Saving..." : "Save Info"}
+                </Button>
+              </div>
+            )}
+          </TabsContent>
+
+          {/* Branding Tab */}
+          <TabsContent value="branding" className="space-y-6 mt-0">
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <Label>Client Logo</Label>
+                <div className="flex items-center gap-4 p-4 rounded-xl border border-border bg-muted/20">
+                  <div className="h-16 w-16 rounded-lg bg-background border flex items-center justify-center overflow-hidden shrink-0">
+                    {form.logo_url ? (
+                      <img src={form.logo_url.startsWith('http') ? form.logo_url : `${import.meta.env.VITE_API_URL.replace('/api', '')}/storage/${form.logo_url}`} alt="Logo" className="h-full w-full object-contain" />
+                    ) : (
+                      <Building2 className="h-8 w-8 text-muted-foreground/40" />
+                    )}
+                  </div>
+                  <div className="space-y-2 flex-1">
+                    <p className="text-xs text-muted-foreground">Upload a transparent PNG or SVG logo. Max 2MB.</p>
+                    <div className="flex gap-2">
+                      <Button variant="outline" size="sm" className="h-8" onClick={() => document.getElementById('logo-upload')?.click()} disabled={uploadingLogo}>
+                        {uploadingLogo ? "Uploading..." : "Change Logo"}
+                      </Button>
+                      <input id="logo-upload" type="file" className="hidden" accept="image/*" onChange={handleLogoUpload} />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label>Primary Color</Label>
+                  <div className="flex items-center gap-2">
+                    <input type="color" value={form.brand_color} onChange={(e) => setForm({ ...form, brand_color: e.target.value })} disabled={!canManage} className="h-10 w-12 rounded-md border border-input cursor-pointer" />
+                    <Input value={form.brand_color} onChange={(e) => setForm({ ...form, brand_color: e.target.value })} disabled={!canManage} className="font-mono text-xs" />
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Secondary Color</Label>
+                  <div className="flex items-center gap-2">
+                    <input type="color" value={form.secondary_color} onChange={(e) => setForm({ ...form, secondary_color: e.target.value })} disabled={!canManage} className="h-10 w-12 rounded-md border border-input cursor-pointer" />
+                    <Input value={form.secondary_color} onChange={(e) => setForm({ ...form, secondary_color: e.target.value })} disabled={!canManage} className="font-mono text-xs" />
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Brand Slogan</Label>
+                <Input value={form.brand_slogan} onChange={(e) => setForm({ ...form, brand_slogan: e.target.value })} disabled={!canManage} placeholder="The future of digital commerce" />
+              </div>
+            </div>
 
             {canManage && (
               <div className="flex items-center justify-between pt-2 border-t border-border">
-                {isAdmin ? (
+                {isAdmin && (
                   <AlertDialog>
                     <AlertDialogTrigger asChild>
-                      <Button variant="destructive" size="sm"><Trash2 className="h-4 w-4 mr-1.5" />Delete Client</Button>
+                      <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive hover:bg-destructive/10"><Trash2 className="h-4 w-4 mr-1.5" />Delete</Button>
                     </AlertDialogTrigger>
                     <AlertDialogContent>
                       <AlertDialogHeader>
-                        <AlertDialogTitle>Delete {client.name}?</AlertDialogTitle>
-                        <AlertDialogDescription>This will permanently delete the client and all associated data. This action cannot be undone.</AlertDialogDescription>
+                        <AlertDialogTitle>Delete Client?</AlertDialogTitle>
+                        <AlertDialogDescription>This will permanently delete the client and all associated data.</AlertDialogDescription>
                       </AlertDialogHeader>
                       <AlertDialogFooter>
                         <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Delete</AlertDialogAction>
+                        <AlertDialogAction onClick={handleDelete} className="bg-destructive">Delete</AlertDialogAction>
                       </AlertDialogFooter>
                     </AlertDialogContent>
                   </AlertDialog>
-                ) : <div />}
-                <Button onClick={handleSave} disabled={saving}>
-                  <Save className="h-4 w-4 mr-1.5" />{saving ? "Saving..." : "Save Changes"}
+                )}
+                <Button onClick={handleSave} disabled={saving} size="sm">
+                  <Save className="h-4 w-4 mr-1.5" />{saving ? "Saving..." : "Save Branding"}
                 </Button>
               </div>
             )}

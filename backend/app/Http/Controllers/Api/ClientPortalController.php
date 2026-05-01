@@ -16,8 +16,8 @@ class ClientPortalController extends Controller
         $client = Client::query()->where('user_id', $request->user()->id)->firstOrFail();
 
         return response()->json([
-            'client' => $client,
-            'plans' => $client->plans()->with('deliverables')->latest()->get(),
+            'client' => $client->load('brandKits'),
+            'plans' => $client->plans()->with('deliverables.assets')->latest()->get(),
         ]);
     }
 

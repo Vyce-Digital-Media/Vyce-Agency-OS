@@ -16,18 +16,21 @@ class TeamController extends Controller
 {
     public function index(Request $request)
     {
-        abort_unless($request->user()->hasAnyRole(['admin', 'manager']), 403);
+        $isSelf = $request->filled('user_id') && $request->user_id === $request->user()->id;
+        abort_unless($isSelf || $request->user()->hasAnyRole(['admin', 'manager']), 403);
 
-        $activeDeliverableCounts = Deliverable::query()
-            ->selectRaw('assigned_to, count(*) as total')
+        $activeDeliverableStats = Deliverable::query()
+            ->selectRaw('assigned_to, count(*) as total, sum(estimated_minutes) as total_minutes')
             ->whereNotNull('assigned_to')
             ->whereNotIn('status', ['approved', 'delivered'])
             ->groupBy('assigned_to')
-            ->pluck('total', 'assigned_to');
+            ->get()
+            ->keyBy('assigned_to');
 
         $users = User::query()
             ->with(['profile', 'roles'])
             ->whereHas('roles', fn ($query) => $query->whereIn('role', ['admin', 'manager', 'team_member', 'client']))
+            ->when(! $request->user()->hasAnyRole(['admin', 'manager']), fn ($q) => $q->where('id', $request->user()->id))
             ->get()
             ->map(fn (User $user) => [
                 'user_id' => $user->id,
@@ -38,7 +41,8 @@ class TeamController extends Controller
                 'expected_start_time' => $user->profile?->expected_start_time,
                 'salary_hourly' => $request->user()->hasRole('admin') ? $user->profile?->salary_hourly : null,
                 'role' => $user->primaryRole(),
-                'deliverableCount' => (int) ($activeDeliverableCounts[$user->id] ?? 0),
+                'deliverableCount' => (int) ($activeDeliverableStats[$user->id]->total ?? 0),
+                'totalEstimatedMinutes' => (int) ($activeDeliverableStats[$user->id]->total_minutes ?? 0),
             ]);
 
         return response()->json(['data' => $users]);

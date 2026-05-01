@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
 import { authApi, type AuthPayload } from "@/api/auth";
 
 type AppRole = "admin" | "manager" | "team_member" | "client";
@@ -48,6 +49,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [role, setRole] = useState<AppRole | null>(null);
   const [loading, setLoading] = useState(true);
+  const navigate = useNavigate();
 
   const applyAuthPayload = (payload: AuthPayload, nextToken?: string | null) => {
     setUser(payload.user);
@@ -106,14 +108,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = async () => {
     const activeToken = token || localStorage.getItem(TOKEN_KEY);
+    
+    // Clear local state immediately to ensure responsive UI
+    clearAuth();
+    navigate("/auth");
+
+    // Attempt backend logout if we had a token
     if (activeToken) {
       try {
         await authApi.logout(activeToken);
       } catch (_error) {
-        // Local logout should still complete if the backend session has expired.
+        // Local logout completes even if backend fails
       }
     }
-    clearAuth();
   };
 
   return (
