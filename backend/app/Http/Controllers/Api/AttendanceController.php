@@ -50,6 +50,69 @@ class AttendanceController extends Controller
         return response()->json(['data' => $query->get()]);
     }
 
+    public function status(Request $request)
+    {
+        $userId = $request->user()->id;
+        $today = now()->toDateString();
+        // startOfWeek(Carbon::MONDAY) ensures week starts on Monday (typical business logic, matching React date-fns startOfWeek({ weekStartsOn: 1 }))
+        $weekStart = now()->startOfWeek(Carbon::MONDAY)->toDateString();
+
+        $activeWork = TimeEntry::query()
+            ->where('user_id', $userId)
+            ->where('is_break', false)
+            ->whereNull('clock_out')
+            ->latest('clock_in')
+            ->first();
+
+        $activeBreak = TimeEntry::query()
+            ->where('user_id', $userId)
+            ->where('is_break', true)
+            ->whereNull('clock_out')
+            ->latest('clock_in')
+            ->first();
+
+        $todayWork = TimeEntry::query()
+            ->where('user_id', $userId)
+            ->where('is_break', false)
+            ->where('date', $today)
+            ->whereNotNull('clock_out')
+            ->sum('duration_seconds');
+
+        $todayBreak = TimeEntry::query()
+            ->where('user_id', $userId)
+            ->where('is_break', true)
+            ->where('date', $today)
+            ->whereNotNull('clock_out')
+            ->sum('duration_seconds');
+
+        $weekWork = TimeEntry::query()
+            ->where('user_id', $userId)
+            ->where('is_break', false)
+            ->where('date', '>=', $weekStart)
+            ->whereNotNull('clock_out')
+            ->sum('duration_seconds');
+
+        $weekBreak = TimeEntry::query()
+            ->where('user_id', $userId)
+            ->where('is_break', true)
+            ->where('date', '>=', $weekStart)
+            ->whereNotNull('clock_out')
+            ->sum('duration_seconds');
+
+        return response()->json([
+            'active_work' => $activeWork,
+            'active_break' => $activeBreak,
+            'today_stats' => [
+                'gross_secs' => (int) $todayWork,
+                'break_secs' => (int) $todayBreak,
+            ],
+            'week_stats' => [
+                'gross_secs' => (int) $weekWork,
+                'break_secs' => (int) $weekBreak,
+            ],
+        ]);
+    }
+
     public function store(Request $request)
     {
         $this->authorize('create', TimeEntry::class);
@@ -69,7 +132,11 @@ class AttendanceController extends Controller
     {
         $this->authorize('create', TimeEntry::class);
 
-        return response()->json(['data' => $this->openEntry($request, false)], 201);
+        $data = $request->validate([
+            'notes' => ['sometimes', 'nullable', 'string'],
+        ]);
+
+        return response()->json(['data' => $this->openEntry($request, false, $data['notes'] ?? null)], 201);
     }
 
     public function breakStart(Request $request)
@@ -105,7 +172,7 @@ class AttendanceController extends Controller
         $clockOut = $data['clock_out'] ?? $timeEntry->clock_out;
         
         if ($clockIn && $clockOut) {
-            $data['duration_minutes'] = Carbon::parse($clockIn)->diffInMinutes(Carbon::parse($clockOut));
+            $data['duration_seconds'] = Carbon::parse($clockIn)->diffInSeconds(Carbon::parse($clockOut));
         }
 
         $timeEntry->update($data);
@@ -113,13 +180,14 @@ class AttendanceController extends Controller
         return response()->json(['data' => $timeEntry->fresh()]);
     }
 
-    private function openEntry(Request $request, bool $isBreak): TimeEntry
+    private function openEntry(Request $request, bool $isBreak, ?string $notes = null): TimeEntry
     {
         return TimeEntry::create([
             'user_id' => $request->user()->id,
             'date' => now()->toDateString(),
             'clock_in' => now(),
             'is_break' => $isBreak,
+            'notes' => $notes,
         ]);
     }
 
@@ -136,7 +204,7 @@ class AttendanceController extends Controller
 
         $entry->update([
             'clock_out' => now(),
-            'duration_minutes' => $entry->clock_in->diffInMinutes(now()),
+            'duration_seconds' => $entry->clock_in->diffInSeconds(now()),
         ]);
 
         return response()->json(['data' => $entry->fresh()]);

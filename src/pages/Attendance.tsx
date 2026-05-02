@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useMemo } from "react";
 import { backend } from "@/integrations/backend/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
+import { useAttendanceData } from "@/context/AttendanceContext";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -35,7 +36,7 @@ interface TimeEntry {
   user_id: string;
   clock_in: string;
   clock_out: string | null;
-  duration_minutes: number | null;
+  duration_seconds: number | null;
   date: string;
   notes: string | null;
   is_break: boolean;
@@ -56,7 +57,7 @@ const TODAY_STR = format(new Date(), "yyyy-MM-dd");
 /**
  * Returns true if an entry is a "missed clock-out": the user clocked in on
  * a past date but never clocked out. We treat these as present (1 day) but
- * with 0 worked minutes, and surface a warning in the UI.
+ * with 0 worked seconds, and surface a warning in the UI.
  */
 function isMissedClockOut(entry: { clock_out: string | null; date: string; is_break?: boolean }): boolean {
   if (entry.is_break) return false;
@@ -65,25 +66,31 @@ function isMissedClockOut(entry: { clock_out: string | null; date: string; is_br
 }
 
 /**
- * Returns the duration of a time entry in minutes.
- * Prefers the DB-computed `duration_minutes`, falls back to live calc from
+ * Returns the duration of a time entry in seconds.
+ * Prefers the DB-computed `duration_seconds`, falls back to live calc from
  * timestamps so freshly-closed sessions render before the next refetch.
  * Returns 0 for sessions still in progress (no clock_out).
  */
-function entryMinutes(e: { clock_in: string; clock_out: string | null; duration_minutes: number | null }): number {
-  if (e.duration_minutes != null && e.duration_minutes > 0) return e.duration_minutes;
+function entrySeconds(e: { clock_in: string; clock_out: string | null; duration_seconds: number | null }): number {
+  if (e.duration_seconds != null && e.duration_seconds > 0) return e.duration_seconds;
   if (!e.clock_out) return 0;
   const ms = new Date(e.clock_out).getTime() - new Date(e.clock_in).getTime();
   if (ms <= 0) return 0;
-  // Round up sub-minute closed sessions to 1m so short shifts/breaks are visible.
-  return Math.max(1, Math.round(ms / 60000));
+  return Math.round(ms / 1000);
 }
 
-function fmt(minutes: number | null): string {
-  if (!minutes || minutes <= 0) return "—";
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
-  return h === 0 ? `${m}m` : m === 0 ? `${h}h` : `${h}h ${m}m`;
+function fmt(seconds: number | null): string {
+  if (seconds === null || seconds === undefined) return "—";
+  const totalSecs = Math.max(0, Math.round(seconds));
+  const h = Math.floor(totalSecs / 3600);
+  const m = Math.floor((totalSecs % 3600) / 60);
+  const s = totalSecs % 60;
+  if (h === 0 && m === 0 && s === 0) return "0s";
+  const parts = [];
+  if (h > 0) parts.push(`${h}h`);
+  if (m > 0) parts.push(`${m}m`);
+  if (s > 0 || (h === 0 && m === 0)) parts.push(`${s}s`);
+  return parts.join(" ");
 }
 
 function fmtTime(ts: string | null): string {
@@ -105,15 +112,22 @@ function attendanceBadge(clockIn: string, expected: string | null | undefined) {
 }
 
 function ElapsedTimer({ clockIn, compact = false }: { clockIn: string; compact?: boolean }) {
-  const [secs, setSecs] = useState(() => differenceInSeconds(new Date(), new Date(clockIn)));
-  useEffect(() => {
-    const iv = setInterval(() => setSecs(differenceInSeconds(new Date(), new Date(clockIn))), 1000);
-    return () => clearInterval(iv);
-  }, [clockIn]);
+  const secs = useLiveDuration(clockIn);
   const h = Math.floor(secs / 3600);
   const m = Math.floor((secs % 3600) / 60);
-  if (compact) return <span className="font-mono tabular-nums text-primary text-sm">{String(h).padStart(2,"0")}:{String(m).padStart(2,"0")}</span>;
-  return <span className="font-mono tabular-nums font-bold text-2xl text-primary">{String(h).padStart(2,"0")}:{String(m).padStart(2,"0")}</span>;
+  const s = secs % 60;
+  if (compact) return <span className="font-mono tabular-nums text-sm">{String(h).padStart(2,"0")}:{String(m).padStart(2,"0")}:{String(s).padStart(2,"0")}</span>;
+  return <span className="font-mono tabular-nums font-bold text-2xl text-primary">{String(h).padStart(2,"0")}:{String(m).padStart(2,"0")}:{String(s).padStart(2,"0")}</span>;
+}
+
+function useLiveDuration(startTime: string | null | undefined) {
+  const [secs, setSecs] = useState(0);
+  useEffect(() => {
+    if (!startTime) { setSecs(0); return; }
+    const iv = setInterval(() => setSecs(differenceInSeconds(new Date(), new Date(startTime))), 1000);
+    return () => clearInterval(iv);
+  }, [startTime]);
+  return secs;
 }
 
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -237,8 +251,11 @@ export default function Attendance() {
   const isAdmin = role === "admin" || role === "manager";
 
   // ── Shared clock state ─────────────────────────────────────────────────────
-  const [openEntry, setOpenEntry] = useState<TimeEntry | null>(null);
-  const [openBreak, setOpenBreak] = useState<TimeEntry | null>(null);
+  // Clock state from global context (shared with Dashboard)
+  const { status: attendanceStatus, refreshStatus } = useAttendanceData();
+  const openEntry = (attendanceStatus?.active_work ?? null) as TimeEntry | null;
+  const openBreak = (attendanceStatus?.active_break ?? null) as TimeEntry | null;
+
   const [shiftNote, setShiftNote] = useState("");
   const [clockLoading, setClockLoading] = useState({ in: false, out: false, brk: false });
 
@@ -288,11 +305,7 @@ export default function Attendance() {
     const monthStart = format(new Date(histYear, histMonth, 1), "yyyy-MM-dd");
     const monthEnd = format(new Date(histYear, histMonth + 1, 0), "yyyy-MM-dd");
 
-    const [openWorkRes, openBrkRes, entriesRes, breaksRes, profileRes] = await Promise.all([
-      backend.from("time_entries" as any).select("*")
-        .eq("user_id", user.id).eq("date", todayStr).eq("is_break", false).is("clock_out", null).maybeSingle(),
-      backend.from("time_entries" as any).select("*")
-        .eq("user_id", user.id).eq("date", todayStr).eq("is_break", true).is("clock_out", null).maybeSingle(),
+    const [entriesRes, breaksRes, profileRes] = await Promise.all([
       backend.from("time_entries" as any).select("*")
         .eq("user_id", user.id).eq("is_break", false)
         .gte("date", monthStart).lte("date", monthEnd)
@@ -304,14 +317,12 @@ export default function Attendance() {
       backend.from("profiles" as any).select("*").eq("user_id", user.id).maybeSingle(),
     ]);
 
-    setOpenEntry(openWorkRes.data ? (openWorkRes.data as unknown as TimeEntry) : null);
-    setOpenBreak(openBrkRes.data ? (openBrkRes.data as unknown as TimeEntry) : null);
     setMyEntries((entriesRes.data as unknown as TimeEntry[]) || []);
     setMyBreakEntries((breaksRes.data as unknown as TimeEntry[]) || []);
     setMyProfile(profileRes.data ? (profileRes.data as unknown as ProfileRow) : null);
-  }, [user, todayStr, histMonth, histYear]);
+  }, [user, histMonth, histYear]);
 
-  // ── Fetch admin data ───────────────────────────────────────────────────────
+  // ── Fetch admin data ─────────────────────────────────────────────────────────
   const fetchAdminData = useCallback(async () => {
     if (!isAdmin) return;
     const rangeStart = format(subDays(new Date(), 60), "yyyy-MM-dd");
@@ -337,49 +348,44 @@ export default function Attendance() {
   useEffect(() => { fetchMyData(); }, [fetchMyData]);
   useEffect(() => { if (isAdmin) fetchAdminData(); else setLoading(false); }, [fetchAdminData, isAdmin]);
 
-  // ── Clock actions ──────────────────────────────────────────────────────────
+  // ── Clock actions ─────────────────────────────────────────────────────────
   const handleClockIn = async () => {
     if (!user) return;
     setClockLoading(p => ({ ...p, in: true }));
-    const { error } = await backend.from("time_entries" as any).insert({
-      user_id: user.id, date: todayStr, clock_in: new Date().toISOString(),
-      notes: shiftNote || null, is_break: false,
-    });
-    if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
+    const { error } = await backend.post("/attendance/clock-in", { notes: shiftNote || null });
+    if (error) toast({ title: "Error", description: (error as any).message, variant: "destructive" });
     else { toast({ title: "Clocked in!", description: `Started at ${format(new Date(), "h:mm a")}` }); setShiftNote(""); }
     setClockLoading(p => ({ ...p, in: false }));
-    await fetchMyData();
+    await Promise.all([fetchMyData(), refreshStatus()]);
   };
-
   const handleClockOut = async () => {
     if (!openEntry) return;
     setClockLoading(p => ({ ...p, out: true }));
-    if (openBreak) await backend.from("time_entries" as any).update({ clock_out: new Date().toISOString() }).eq("id", openBreak.id);
-    const { error } = await backend.from("time_entries" as any).update({ clock_out: new Date().toISOString() }).eq("id", openEntry.id);
-    if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
+    const { error } = await backend.post("/attendance/clock-out");
+    if (error) toast({ title: "Error", description: (error as any).message, variant: "destructive" });
     else toast({ title: "Clocked out!", description: `Ended at ${format(new Date(), "h:mm a")}` });
     setClockLoading(p => ({ ...p, out: false }));
-    await fetchMyData();
+    await Promise.all([fetchMyData(), refreshStatus()]);
   };
 
   const handleStartBreak = async () => {
     if (!user || !openEntry) return;
     setClockLoading(p => ({ ...p, brk: true }));
-    await backend.from("time_entries" as any).insert({
-      user_id: user.id, date: todayStr, clock_in: new Date().toISOString(), is_break: true,
-    });
-    toast({ title: "Break started" });
+    const { error } = await backend.post("/attendance/break-start");
+    if (error) toast({ title: "Error", description: (error as any).message, variant: "destructive" });
+    else toast({ title: "Break started" });
     setClockLoading(p => ({ ...p, brk: false }));
-    await fetchMyData();
+    await Promise.all([fetchMyData(), refreshStatus()]);
   };
 
   const handleEndBreak = async () => {
     if (!openBreak) return;
     setClockLoading(p => ({ ...p, brk: true }));
-    await backend.from("time_entries" as any).update({ clock_out: new Date().toISOString() }).eq("id", openBreak.id);
-    toast({ title: "Break ended", description: "Welcome back!" });
+    const { error } = await backend.post("/attendance/break-end");
+    if (error) toast({ title: "Error", description: (error as any).message, variant: "destructive" });
+    else toast({ title: "Break ended", description: "Welcome back!" });
     setClockLoading(p => ({ ...p, brk: false }));
-    await fetchMyData();
+    await Promise.all([fetchMyData(), refreshStatus()]);
   };
 
   // ── Save expected start time ───────────────────────────────────────────────
@@ -445,10 +451,10 @@ export default function Attendance() {
     const header = ["Member", "Role", "Expected Start", "Clock In", "Clock Out", "Gross Hours", "Break", "Net Hours", "Attendance", "Notes"];
     const rows = logEntries.map(e => {
       const p = profileMap[e.user_id];
-      const breakMin = logBreaks.filter(b => b.user_id === e.user_id).reduce((s, b) => s + entryMinutes(b), 0);
+      const breakSecs = logBreaks.filter(b => b.user_id === e.user_id).reduce((s, b) => s + entrySeconds(b), 0);
       const missed = isMissedClockOut(e);
-      const grossMin = missed ? 0 : entryMinutes(e);
-      const netMin = grossMin - breakMin;
+      const grossSecs = missed ? 0 : entrySeconds(e);
+      const netSecs = grossSecs - breakSecs;
       const badge = attendanceBadge(e.clock_in, p?.expected_start_time);
       return [
         p?.full_name || "Unknown",
@@ -456,9 +462,9 @@ export default function Attendance() {
         p?.expected_start_time?.slice(0, 5) || "",
         fmtTime(e.clock_in),
         e.clock_out ? fmtTime(e.clock_out) : (missed ? "Missing" : "Active"),
-        grossMin ? (grossMin / 60).toFixed(2) : "",
-        breakMin > 0 ? (breakMin / 60).toFixed(2) : "0",
-        e.clock_out ? (netMin / 60).toFixed(2) : (missed ? "0" : ""),
+        grossSecs ? (grossSecs / 3600).toFixed(2) : "",
+        breakSecs > 0 ? (breakSecs / 3600).toFixed(2) : "0",
+        e.clock_out ? (netSecs / 3600).toFixed(2) : (missed ? "0" : ""),
         badge?.label || "",
         e.notes || "",
       ];
@@ -468,18 +474,25 @@ export default function Attendance() {
 
 
   // ── Personal derived stats ─────────────────────────────────────────────────
-  const myCompletedEntries = myEntries.filter(e => e.clock_out);
-  const myTotalMinutes = myCompletedEntries.reduce((s, e) => s + entryMinutes(e), 0);
-  const myDaysPresent = new Set(myEntries.filter(e => e.clock_out || isMissedClockOut(e)).map(e => e.date)).size;
-  const myAvgMinutes = myDaysPresent > 0 ? Math.round(myTotalMinutes / myDaysPresent) : 0;
-  const myTotalBreakMin = myBreakEntries.reduce((s, e) => s + entryMinutes(e), 0);
-  const myNetMin = myTotalMinutes - myTotalBreakMin;
+  const activeWorkSecs = useLiveDuration(openEntry?.clock_in);
+  const activeBreakSecs = useLiveDuration(openBreak?.clock_in);
 
-  const todayDoneMin = myCompletedEntries.filter(e => e.date === todayStr).reduce((s, e) => s + entryMinutes(e), 0);
-  const todayBreakMin = myBreakEntries.filter(e => e.date === todayStr).reduce((s, e) => s + entryMinutes(e), 0);
+  const myCompletedEntries = myEntries.filter(e => e.clock_out);
+  const myTotalSecs = myCompletedEntries.reduce((s, e) => s + entrySeconds(e), 0) + activeWorkSecs;
+  const myDaysPresent = new Set(myEntries.filter(e => e.clock_out || isMissedClockOut(e)).map(e => e.date)).size;
+  const myAvgSecs = myDaysPresent > 0 ? Math.round(myTotalSecs / myDaysPresent) : 0;
+  const myTotalBreakSecs = myBreakEntries.reduce((s, e) => s + entrySeconds(e), 0) + activeBreakSecs;
+  const myNetSecs = myTotalSecs - myTotalBreakSecs;
+
+  const todayDoneSecs = myCompletedEntries.filter(e => e.date === todayStr).reduce((s, e) => s + entrySeconds(e), 0);
+  const todayBreakSecs = myBreakEntries.filter(e => e.date === todayStr).reduce((s, e) => s + entrySeconds(e), 0);
+  
+  const todayGrossTotalSecs = todayDoneSecs + activeWorkSecs;
+  const todayBreakTotalSecs = todayBreakSecs + activeBreakSecs;
+  const todayNetTotalSecs = todayGrossTotalSecs - todayBreakTotalSecs;
 
   const weekStart = format(startOfWeek(new Date(), { weekStartsOn: 1 }), "yyyy-MM-dd");
-  const myWeekMin = myEntries.filter(e => e.date >= weekStart && e.clock_out).reduce((s, e) => s + entryMinutes(e), 0);
+  const myWeekSecs = myEntries.filter(e => e.date >= weekStart && (e.clock_out || !e.clock_out)).reduce((s, e) => s + (e.clock_out ? entrySeconds(e) : activeWorkSecs), 0);
 
   // ── Admin derived stats ────────────────────────────────────────────────────
   const profileMap = useMemo(() => {
@@ -492,27 +505,26 @@ export default function Attendance() {
 
   // Who's in right now
   const activeWork = useMemo(() =>
-    allEntries.filter(e => e.date === todayStr && !e.clock_out), [allEntries, todayStr]);
+    allEntries.filter(e => !e.clock_out), [allEntries]);
   const activeBreaks = useMemo(() =>
-    allBreaks.filter(e => e.date === todayStr && !e.clock_out), [allBreaks, todayStr]);
+    allBreaks.filter(e => !e.clock_out), [allBreaks]);
   const breakUserIds = useMemo(() => new Set(activeBreaks.map(e => e.user_id)), [activeBreaks]);
   const clockedInCount = activeWork.filter(e => !breakUserIds.has(e.user_id)).length;
   const onBreakCount = activeWork.filter(e => breakUserIds.has(e.user_id)).length;
-  const teamTodayMin = allEntries.filter(e => e.date === todayStr && e.clock_out).reduce((s, e) => s + entryMinutes(e), 0);
+  const teamTodaySecs = allEntries.filter(e => e.date === todayStr && e.clock_out).reduce((s, e) => s + entrySeconds(e), 0);
 
-  // Overtime helper: total minutes worked today for a user (completed sessions)
-  function getMemberTodayTotalMin(userId: string): number {
+  // Overtime helper: total worked today for a user (completed sessions)
+  function getMemberTodayTotalSecs(userId: string): number {
     return allEntries.filter(e => e.user_id === userId && e.date === todayStr && e.clock_out)
-      .reduce((s, e) => s + entryMinutes(e), 0);
+      .reduce((s, e) => s + entrySeconds(e), 0);
   }
 
   // For a live session, estimate total including active session
-  function getMemberTodayEstTotal(userId: string): number {
-    const done = getMemberTodayTotalMin(userId);
+  function getMemberTodayEstTotalSecs(userId: string): number {
+    const done = getMemberTodayTotalSecs(userId);
     const active = activeWork.find(e => e.user_id === userId);
     if (!active) return done;
-    const activeSecs = differenceInSeconds(new Date(), new Date(active.clock_in));
-    return done + Math.floor(activeSecs / 60);
+    return done + differenceInSeconds(new Date(), new Date(active.clock_in));
   }
 
   // Daily log entries
@@ -527,9 +539,9 @@ export default function Attendance() {
   const analyticsWeekStart = addDays(startOfWeek(new Date(), { weekStartsOn: 1 }), analyticsWeekOffset * 7);
   const analyticsWeekDays = Array.from({ length: 7 }, (_, i) => format(addDays(analyticsWeekStart, i), "yyyy-MM-dd"));
 
-  function getMemberDayMin(userId: string, dateStr: string): number {
+  function getMemberDaySecs(userId: string, dateStr: string): number {
     return allEntries.filter(e => e.user_id === userId && e.date === dateStr && e.clock_out)
-      .reduce((s, e) => s + entryMinutes(e), 0);
+      .reduce((s, e) => s + entrySeconds(e), 0);
   }
 
   function cellStyle(min: number) {
@@ -551,7 +563,7 @@ export default function Attendance() {
   const trendDays = Array.from({ length: 30 }, (_, i) => format(subDays(new Date(), 29 - i), "yyyy-MM-dd"));
   const trendData = trendDays.map(d => ({
     date: format(parseISO(d), "M/d"),
-    hours: +(allEntries.filter(e => e.date === d && e.clock_out).reduce((s, e) => s + entryMinutes(e), 0) / 60).toFixed(1),
+    hours: +(allEntries.filter(e => e.date === d && e.clock_out).reduce((s, e) => s + entrySeconds(e), 0) / 3600).toFixed(1),
   }));
 
   // Per-member avg hours (last 30 days)
@@ -559,9 +571,9 @@ export default function Attendance() {
     const days30Start = format(subDays(new Date(), 30), "yyyy-MM-dd");
     return teamMembers.map(p => {
       const entries = allEntries.filter(e => e.user_id === p.user_id && e.date >= days30Start && e.clock_out);
-      const totalMin = entries.reduce((s, e) => s + entryMinutes(e), 0);
+      const totalSecs = entries.reduce((s, e) => s + entrySeconds(e), 0);
       const days = new Set(entries.map(e => e.date)).size;
-      return { name: p.full_name?.split(" ")[0] || "?", avg: days > 0 ? +(totalMin / days / 60).toFixed(1) : 0, userId: p.user_id };
+      return { name: p.full_name?.split(" ")[0] || "?", avg: days > 0 ? +(totalSecs / days / 3600).toFixed(1) : 0, userId: p.user_id };
     }).sort((a, b) => b.avg - a.avg);
   }, [teamMembers, allEntries]);
 
@@ -584,13 +596,13 @@ export default function Attendance() {
   const memberMonthEnd = format(new Date(memberHistYear, memberHistMonth + 1, 0), "yyyy-MM-dd");
   const memberEntries = allEntries.filter(e => e.user_id === selectedMember && e.date >= memberMonthStart && e.date <= memberMonthEnd && e.clock_out);
   const memberBreaks = allBreaks.filter(e => e.user_id === selectedMember && e.date >= memberMonthStart && e.date <= memberMonthEnd && e.clock_out);
-  const memberTotalMin = memberEntries.reduce((s, e) => s + entryMinutes(e), 0);
-  const memberBreakMin = memberBreaks.reduce((s, e) => s + entryMinutes(e), 0);
-  const memberNetMin = memberTotalMin - memberBreakMin;
+  const memberTotalSecs = memberEntries.reduce((s, e) => s + entrySeconds(e), 0);
+  const memberBreakSecs = memberBreaks.reduce((s, e) => s + entrySeconds(e), 0);
+  const memberNetSecs = memberTotalSecs - memberBreakSecs;
   const memberDaysPresent = new Set(memberEntries.map(e => e.date)).size;
   
   const allTimeMemberEntries = allEntries.filter(e => e.user_id === selectedMember && e.clock_out);
-  const allTimeMemberMin = allTimeMemberEntries.reduce((s, e) => s + entryMinutes(e), 0);
+  const allTimeMemberSecs = allTimeMemberEntries.reduce((s, e) => s + entrySeconds(e), 0);
 
 
   // Calendar view
@@ -602,7 +614,7 @@ export default function Attendance() {
     return allEntries.filter(e => e.date === dateStr && e.clock_out).map(e => ({
       entry: e,
       profile: profileMap[e.user_id],
-      breakMin: allBreaks.filter(b => b.user_id === e.user_id && b.date === dateStr && b.clock_out).reduce((s, b) => s + entryMinutes(b), 0),
+      breakSecs: allBreaks.filter(b => b.user_id === e.user_id && b.date === dateStr && b.clock_out).reduce((s, b) => s + entrySeconds(b), 0),
     }));
   }
 
@@ -658,14 +670,14 @@ export default function Attendance() {
             {/* Today summary */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               {[
-                { label: "Today (gross)", value: openEntry && !openEntry.clock_out ? <ElapsedTimer clockIn={openEntry.clock_in} compact /> : fmt(todayDoneMin) },
-                { label: "Today (break)", value: fmt(todayBreakMin) },
-                { label: "Today (net)", value: fmt(todayDoneMin - todayBreakMin) },
-                { label: "This Week", value: fmt(myWeekMin) },
+                { label: "Today (gross)", value: fmt(todayGrossTotalSecs) },
+                { label: "Today (break)", value: fmt(todayBreakTotalSecs) },
+                { label: "Today (net)", value: <span className="text-primary">{fmt(todayNetTotalSecs)}</span> },
+                { label: "This Week", value: fmt(myWeekSecs) },
               ].map(({ label, value }) => (
-                <div key={label} className="stat-card text-center py-4">
+                <div key={label} className="stat-card text-center py-4 border-primary/10 bg-primary/5">
                   <p className="text-lg font-bold">{value}</p>
-                  <p className="text-xs text-muted-foreground mt-1">{label}</p>
+                  <p className="text-xs text-muted-foreground mt-1 uppercase tracking-wider font-medium">{label}</p>
                 </div>
               ))}
             </div>
@@ -718,18 +730,24 @@ export default function Attendance() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {myEntries.map(e => {
-                        const dayBreak = myBreakEntries.filter(b => b.date === e.date).reduce((s, b) => s + entryMinutes(b), 0);
-                        const netMin = entryMinutes(e) - dayBreak;
+                      {myEntries.map((e, idx) => {
+                        const isThisEntryActive = !e.clock_out;
+                        const entrySec = isThisEntryActive ? activeWorkSecs : entrySeconds(e);
+                        // Only subtract daily break from the FIRST entry of that day to avoid double-deduction in total views
+                        // But for display per row, maybe it's better to just show the entry's own net if we had break-association.
+                        // Since we don't, we'll show "Entry Gross" and "Day Break" separately.
+                        const dayBreakSecs = myBreakEntries.filter(b => b.date === e.date).reduce((s, b) => s + (b.clock_out ? entrySeconds(b) : activeBreakSecs), 0);
+                        const isFirstEntryOfDay = idx === 0 || myEntries[idx - 1].date !== e.date;
                         const badge = attendanceBadge(e.clock_in, myProfile?.expected_start_time);
+
                         return (
                           <TableRow key={e.id}>
                             <TableCell className="font-medium">{format(parseISO(e.date), "MMM d")}</TableCell>
                             <TableCell>{fmtTime(e.clock_in)}</TableCell>
-                            <TableCell>{e.clock_out ? fmtTime(e.clock_out) : <span className="text-success font-medium text-xs">Active</span>}</TableCell>
-                            <TableCell>{fmt(e.duration_minutes)}</TableCell>
-                            <TableCell>{fmt(dayBreak) !== "—" ? fmt(dayBreak) : <span className="text-muted-foreground/40">—</span>}</TableCell>
-                            <TableCell className="font-medium">{e.clock_out ? fmt(netMin) : "—"}</TableCell>
+                            <TableCell>{e.clock_out ? fmtTime(e.clock_out) : <span className="text-success font-medium text-xs animate-pulse">Active</span>}</TableCell>
+                            <TableCell>{fmt(entrySec)}</TableCell>
+                            <TableCell>{isFirstEntryOfDay ? (fmt(dayBreakSecs) !== "—" ? fmt(dayBreakSecs) : <span className="text-muted-foreground/40">—</span>) : <span className="text-muted-foreground/20">"</span>}</TableCell>
+                            <TableCell className="font-medium">{isFirstEntryOfDay ? fmt(entrySec - dayBreakSecs) : fmt(entrySec)}</TableCell>
                             <TableCell className="text-xs text-muted-foreground max-w-[120px] truncate">{e.notes || "—"}</TableCell>
                             <TableCell>
                               {badge ? <span className={cn("status-badge", badge.cls)}>{badge.label}</span> : <span className="text-xs text-muted-foreground">—</span>}
@@ -779,14 +797,14 @@ export default function Attendance() {
           />
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             {[
-              { label: "Today (gross)", value: openEntry && !openEntry.clock_out ? <ElapsedTimer clockIn={openEntry.clock_in} compact /> : fmt(todayDoneMin) },
-              { label: "Today (break)", value: fmt(todayBreakMin) },
-              { label: "Today (net)", value: fmt(todayDoneMin - todayBreakMin) },
-              { label: "This Week", value: fmt(myWeekMin) },
+              { label: "Today (gross)", value: fmt(todayGrossTotalSecs) },
+              { label: "Today (break)", value: fmt(todayBreakTotalSecs) },
+              { label: "Today (net)", value: <span className="text-primary">{fmt(todayNetTotalSecs)}</span> },
+              { label: "This Week", value: fmt(myWeekSecs) },
             ].map(({ label, value }) => (
-              <div key={label} className="stat-card text-center py-4">
+              <div key={label} className="stat-card text-center py-4 border-primary/10 bg-primary/5">
                 <p className="text-lg font-bold">{value}</p>
-                <p className="text-xs text-muted-foreground mt-1">{label}</p>
+                <p className="text-xs text-muted-foreground mt-1 uppercase tracking-wider font-medium">{label}</p>
               </div>
             ))}
           </div>
@@ -907,7 +925,7 @@ export default function Attendance() {
                 <Timer className="h-5 w-5 text-primary" />
               </div>
               <div>
-                <p className="text-2xl font-bold">{fmt(teamTodayMin)}</p>
+                <p className="text-2xl font-bold">{fmt(teamTodaySecs)}</p>
                 <p className="text-xs text-muted-foreground">Team Hours Today</p>
               </div>
             </div>
@@ -929,9 +947,9 @@ export default function Attendance() {
                 const active = activeWork.find(e => e.user_id === p.user_id);
                 const onBreak = breakUserIds.has(p.user_id);
                 const activeSince = active?.clock_in;
-                const todayNetMin = getMemberTodayTotalMin(p.user_id);
-                const estTotalMin = getMemberTodayEstTotal(p.user_id);
-                const isOvertime = estTotalMin > 540; // 9 hours
+                const todayNetSecs = getMemberTodayTotalSecs(p.user_id);
+                const estTotalSecs = getMemberTodayEstTotalSecs(p.user_id);
+                const isOvertime = estTotalSecs > 540 * 60; // 9 hours
                 return (
                   <div key={p.user_id} className={cn(
                     "flex items-center justify-between rounded-lg px-3 py-2.5 border transition-colors",
@@ -973,7 +991,7 @@ export default function Attendance() {
                       ) : (
                         <>
                           <p className="text-xs text-muted-foreground">Not clocked in</p>
-                          {todayNetMin > 0 && <p className="text-xs text-muted-foreground">{fmt(todayNetMin)} today</p>}
+                          {todayNetSecs > 0 && <p className="text-xs text-muted-foreground">{fmt(todayNetSecs)} today</p>}
                         </>
                       )}
                     </div>
@@ -1040,12 +1058,12 @@ export default function Attendance() {
                 <TableBody>
                   {logEntries.map(e => {
                     const p = profileMap[e.user_id];
-                    const breakMin = logBreaks.filter(b => b.user_id === e.user_id).reduce((s, b) => s + entryMinutes(b), 0);
+                    const breakSecs = logBreaks.filter(b => b.user_id === e.user_id).reduce((s, b) => s + entrySeconds(b), 0);
                     const missed = isMissedClockOut(e);
-                    const grossMin = missed ? 0 : entryMinutes(e);
-                    const netMin = grossMin - breakMin;
+                    const grossSecs = missed ? 0 : entrySeconds(e);
+                    const netSecs = grossSecs - breakSecs;
                     const badge = attendanceBadge(e.clock_in, p?.expected_start_time);
-                    const isOvertime = e.clock_out && netMin > 540;
+                    const isOvertime = e.clock_out && netSecs > 540 * 60;
                     return (
                       <TableRow key={e.id}>
                         <TableCell>
@@ -1065,9 +1083,9 @@ export default function Attendance() {
                             : missed ? <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-warning bg-warning/10 px-1.5 py-0.5 rounded-full"><AlertTriangle className="h-2.5 w-2.5" /> Missing</span>
                             : <span className="text-success font-medium text-xs">Active</span>}
                         </TableCell>
-                        <TableCell>{e.clock_out ? fmt(e.duration_minutes) : missed ? <span className="text-muted-foreground">0h</span> : <ElapsedTimer clockIn={e.clock_in} compact />}</TableCell>
-                        <TableCell>{breakMin > 0 ? fmt(breakMin) : "—"}</TableCell>
-                        <TableCell className="font-medium">{e.clock_out ? fmt(netMin) : missed ? <span className="text-muted-foreground">0h</span> : "—"}</TableCell>
+                        <TableCell>{e.clock_out ? fmt(e.duration_seconds) : missed ? <span className="text-muted-foreground">0h</span> : <ElapsedTimer clockIn={e.clock_in} compact />}</TableCell>
+                        <TableCell>{breakSecs > 0 ? fmt(breakSecs) : "—"}</TableCell>
+                        <TableCell className="font-medium">{e.clock_out ? fmt(netSecs) : missed ? <span className="text-muted-foreground">0h</span> : "—"}</TableCell>
                         <TableCell>
                           <div className="flex flex-col gap-1">
                             {missed ? <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-warning bg-warning/10 px-1.5 py-0.5 rounded-full w-fit"><AlertTriangle className="h-2.5 w-2.5" /> No Clock Out</span>
@@ -1096,7 +1114,7 @@ export default function Attendance() {
                 <span>{logEntries.length} member{logEntries.length !== 1 ? "s" : ""} logged</span>
                 <span>
                   Team total: <strong className="text-foreground">
-                    {fmt(logEntries.filter(e => e.clock_out).reduce((s, e) => s + entryMinutes(e), 0))}
+                    {fmt(logEntries.filter(e => e.clock_out).reduce((s, e) => s + entrySeconds(e), 0))}
                   </strong>
                 </span>
               </div>
@@ -1147,8 +1165,8 @@ export default function Attendance() {
                   </TableHeader>
                   <TableBody>
                     {teamMembers.map(p => {
-                      const dayMins = analyticsWeekDays.map(d => getMemberDayMin(p.user_id, d));
-                      const total = dayMins.reduce((s, m) => s + m, 0);
+                      const daySecs = analyticsWeekDays.map(d => getMemberDaySecs(p.user_id, d));
+                      const total = daySecs.reduce((s, m) => s + m, 0);
                       return (
                         <TableRow key={p.user_id}>
                           <TableCell>
@@ -1159,9 +1177,9 @@ export default function Attendance() {
                               <span className="text-sm font-medium truncate max-w-[100px]">{p.full_name}</span>
                             </div>
                           </TableCell>
-                          {dayMins.map((m, i) => (
+                          {daySecs.map((m, i) => (
                             <TableCell key={i} className={cn("text-center text-xs rounded", cellBg(m))}>
-                              <span className={cellStyle(m)}>{m > 0 ? `${(m / 60).toFixed(1)}h` : "—"}</span>
+                              <span className={cellStyle(m)}>{m > 0 ? `${(m / 3600).toFixed(1)}h` : "—"}</span>
                             </TableCell>
                           ))}
                           <TableCell className="text-center text-xs font-semibold">
@@ -1278,7 +1296,7 @@ export default function Attendance() {
                         <div>
                           <h3 className="font-semibold text-base">{selectedProfile.full_name}</h3>
                           <p className="text-xs text-muted-foreground">{selectedProfile.internal_label || "Team Member"}</p>
-                          <p className="text-xs text-muted-foreground mt-0.5">All-time: {fmt(allTimeMemberMin)}</p>
+                          <p className="text-xs text-muted-foreground mt-0.5">All-time: {fmt(allTimeMemberSecs)}</p>
                         </div>
                       </div>
                       <div className="flex items-center gap-3 flex-wrap justify-end">
@@ -1304,9 +1322,9 @@ export default function Attendance() {
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                     {[
                       { label: "Days Present", value: memberDaysPresent },
-                      { label: "Total Hours", value: fmt(memberTotalMin) },
-                      { label: "Break Time", value: fmt(memberBreakMin) },
-                      { label: "Net Productive", value: fmt(memberNetMin) },
+                      { label: "Total Hours", value: fmt(memberTotalSecs) },
+                      { label: "Break Time", value: fmt(memberBreakSecs) },
+                      { label: "Net Productive", value: fmt(memberNetSecs) },
                     ].map(({ label, value }) => (
                       <div key={label} className="stat-card text-center py-4">
                         <p className="text-xl font-bold">{value}</p>
@@ -1339,20 +1357,20 @@ export default function Attendance() {
                         </TableHeader>
                         <TableBody>
                           {memberEntries.map(e => {
-                            const dayBreak = memberBreaks.filter(b => b.date === e.date).reduce((s, b) => s + entryMinutes(b), 0);
-                            const netMin = entryMinutes(e) - dayBreak;
+                            const dayBreakSecs = memberBreaks.filter(b => b.date === e.date).reduce((s, b) => s + entrySeconds(b), 0);
+                            const netSecs = entrySeconds(e) - dayBreakSecs;
                             const badge = attendanceBadge(e.clock_in, selectedProfile.expected_start_time);
-                            const isOvertime = netMin > 540;
+                            const isOvertime = netSecs > 540 * 60;
                             return (
                               <TableRow key={e.id}>
                                 <TableCell className="font-medium">{format(parseISO(e.date), "MMM d")}</TableCell>
                                 <TableCell>{fmtTime(e.clock_in)}</TableCell>
                                 <TableCell>{fmtTime(e.clock_out)}</TableCell>
-                                <TableCell>{fmt(e.duration_minutes)}</TableCell>
-                                <TableCell>{dayBreak > 0 ? fmt(dayBreak) : "—"}</TableCell>
+                                <TableCell>{fmt(e.duration_seconds)}</TableCell>
+                                <TableCell>{dayBreakSecs > 0 ? fmt(dayBreakSecs) : "—"}</TableCell>
                                 <TableCell className="font-medium">
                                   <div className="flex items-center gap-1.5">
-                                    {fmt(netMin)}
+                                    {fmt(netSecs)}
                                     {isOvertime && <AlertTriangle className="h-3 w-3 text-warning" />}
                                   </div>
                                 </TableCell>
@@ -1468,8 +1486,8 @@ export default function Attendance() {
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {getCalDayMembers(selectedDay).map(({ entry, profile, breakMin }) => {
-                    const netMin = entryMinutes(entry) - breakMin;
+                  {getCalDayMembers(selectedDay).map(({ entry, profile, breakSecs }) => {
+                    const netSecs = entrySeconds(entry) - breakSecs;
                     const badge = attendanceBadge(entry.clock_in, profile?.expected_start_time);
                     return (
                       <div key={entry.id} className="flex items-center justify-between rounded-lg bg-muted/40 px-3 py-2">
@@ -1484,7 +1502,7 @@ export default function Attendance() {
                         </div>
                         <div className="text-right text-xs text-muted-foreground">
                           <p>{fmtTime(entry.clock_in)} → {entry.clock_out ? fmtTime(entry.clock_out) : "Active"}</p>
-                          <p>Net: <strong className="text-foreground">{fmt(netMin)}</strong>{breakMin > 0 ? ` (${fmt(breakMin)} break)` : ""}</p>
+                          <p>Net: <strong className="text-foreground">{fmt(netSecs)}</strong>{breakSecs > 0 ? ` (${fmt(breakSecs)} break)` : ""}</p>
                         </div>
                       </div>
                     );

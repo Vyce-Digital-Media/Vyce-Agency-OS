@@ -4,6 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
+import { AttendanceProvider } from "@/context/AttendanceContext";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import RoleRoute from "@/components/RoleRoute";
 import AppLayout from "@/components/layout/AppLayout";
@@ -94,7 +95,9 @@ const App = () => (
       <Sonner />
       <BrowserRouter>
         <AuthProvider>
-          <RoleRouter />
+          <AttendanceProvider>
+            <RoleRouter />
+          </AttendanceProvider>
         </AuthProvider>
       </BrowserRouter>
     </TooltipProvider>

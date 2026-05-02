@@ -16,7 +16,7 @@ class TimeEntry extends Model
         'date',
         'clock_in',
         'clock_out',
-        'duration_minutes',
+        'duration_seconds',
         'is_break',
         'notes',
     ];

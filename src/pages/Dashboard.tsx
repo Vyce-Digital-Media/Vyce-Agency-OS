@@ -1,7 +1,7 @@
-import { useEffect, useState, useMemo, useCallback } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { backend } from "@/integrations/backend/client";
 import { useAuth } from "@/contexts/AuthContext";
-import { useToast } from "@/hooks/use-toast";
+import { useAttendanceData } from "@/context/AttendanceContext";
 import { useNavigate } from "react-router-dom";
 import {
   Users, CalendarRange, FileText, CheckCircle2, AlertTriangle, Clock,
@@ -67,7 +67,7 @@ interface DashTimeEntry {
   user_id: string;
   clock_in: string;
   clock_out: string | null;
-  duration_minutes: number | null;
+  duration_seconds: number | null;
   date: string;
   notes: string | null;
   is_break: boolean;
@@ -80,17 +80,21 @@ interface Analytics {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function DashElapsedTimer({ clockIn }: { clockIn: string }) {
-  const [seconds, setSeconds] = useState(() =>
-    differenceInSeconds(new Date(), new Date(clockIn))
-  );
+function useLiveDuration(startTime: string | null | undefined) {
+  const [secs, setSecs] = useState(0);
   useEffect(() => {
-    const iv = setInterval(() => setSeconds(differenceInSeconds(new Date(), new Date(clockIn))), 1000);
+    if (!startTime) { setSecs(0); return; }
+    const iv = setInterval(() => setSecs(differenceInSeconds(new Date(), new Date(startTime))), 1000);
     return () => clearInterval(iv);
-  }, [clockIn]);
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = seconds % 60;
+  }, [startTime]);
+  return secs;
+}
+
+function DashElapsedTimer({ clockIn }: { clockIn: string }) {
+  const secs = useLiveDuration(clockIn);
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = secs % 60;
   return (
     <span className="font-mono tabular-nums font-bold text-xl text-primary">
       {String(h).padStart(2, "0")}:{String(m).padStart(2, "0")}:{String(s).padStart(2, "0")}
@@ -98,20 +102,25 @@ function DashElapsedTimer({ clockIn }: { clockIn: string }) {
   );
 }
 
-function entryMinutes(e: { clock_in: string; clock_out: string | null; duration_minutes: number | null }): number {
-  if (e.duration_minutes != null && e.duration_minutes > 0) return e.duration_minutes;
+function dashEntrySeconds(e: { clock_in: string; clock_out: string | null; duration_seconds: number | null }): number {
+  if (e.duration_seconds != null && e.duration_seconds > 0) return e.duration_seconds;
   if (!e.clock_out) return 0;
   const ms = new Date(e.clock_out).getTime() - new Date(e.clock_in).getTime();
   if (ms <= 0) return 0;
-  return Math.max(1, Math.round(ms / 60000));
+  return Math.round(ms / 1000);
 }
 
-function dashFormatDuration(minutes: number | null): string {
-  if (!minutes || minutes < 0) return "0m";
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
-  if (h === 0) return `${m}m`;
-  return `${h}h ${m}m`;
+function dashFormatDuration(seconds: number | null): string {
+  if (seconds === null || seconds === undefined) return "0s";
+  const totalSecs = Math.max(0, Math.round(seconds));
+  const h = Math.floor(totalSecs / 3600);
+  const m = Math.floor((totalSecs % 3600) / 60);
+  const s = totalSecs % 60;
+  const parts = [];
+  if (h > 0) parts.push(`${h}h`);
+  if (m > 0) parts.push(`${m}m`);
+  if (s > 0 || (h === 0 && m === 0)) parts.push(`${s}s`);
+  return parts.join(" ");
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -299,17 +308,25 @@ export default function Dashboard() {
   const [selectedDeliverable, setSelectedDeliverable] = useState<DeliverableForSheet | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
 
-  // ── Time tracking state (team_member view) ────────────────────────────────
-  const [clockEntry, setClockEntry] = useState<DashTimeEntry | null>(null);
-  const [breakEntry, setBreakEntry] = useState<DashTimeEntry | null>(null);
-  const [todayTimeMin, setTodayTimeMin] = useState(0);
-  const [todayBreakMin, setTodayBreakMin] = useState(0);
-  const [weekTimeMin, setWeekTimeMin] = useState(0);
-  const [weekBreakMin, setWeekBreakMin] = useState(0);
   const [shiftNote, setShiftNote] = useState("");
-  const [clockingIn, setClockingIn] = useState(false);
-  const [clockingOut, setClockingOut] = useState(false);
-  const [breakLoading, setBreakLoading] = useState(false);
+
+  // ── Attendance from global context ────────────────────────────────────────
+  const {
+    status: attendanceStatus,
+    loading: attendanceLoading,
+    clockingIn, clockingOut, breakLoading,
+    clockIn, clockOut, startBreak, endBreak,
+  } = useAttendanceData();
+
+  const clockEntry = attendanceStatus?.active_work ?? null;
+  const breakEntry = attendanceStatus?.active_break ?? null;
+  const todayTimeSecs = attendanceStatus?.today_stats.gross_secs ?? 0;
+  const todayBreakSecs = attendanceStatus?.today_stats.break_secs ?? 0;
+  const weekTimeSecs = attendanceStatus?.week_stats.gross_secs ?? 0;
+  const weekBreakSecs = attendanceStatus?.week_stats.break_secs ?? 0;
+
+  const activeWorkSecs = useLiveDuration(clockEntry?.clock_in);
+  const activeBreakSecs = useLiveDuration(breakEntry?.clock_in);
 
   const today = new Date().toISOString().split("T")[0];
   const nowDate = new Date();
@@ -333,106 +350,6 @@ export default function Dashboard() {
     fetchAll();
   }, []);
 
-  // ── Time tracking fetch (only for team_member) ────────────────────────────
-  const fetchTimeData = useCallback(async () => {
-    if (!user) return;
-    const weekStart = new Date();
-    weekStart.setDate(weekStart.getDate() - (weekStart.getDay() === 0 ? 6 : weekStart.getDay() - 1));
-    const weekStartStr = weekStart.toISOString().split("T")[0];
-
-    const [openWorkRes, openBreakRes, recentRes, breaksRes] = await Promise.all([
-      backend.from("time_entries" as any).select("*")
-        .eq("user_id", user.id).eq("date", today).eq("is_break", false).is("clock_out", null).maybeSingle(),
-      backend.from("time_entries" as any).select("*")
-        .eq("user_id", user.id).eq("date", today).eq("is_break", true).is("clock_out", null).maybeSingle(),
-      backend.from("time_entries" as any).select("*")
-        .eq("user_id", user.id).eq("is_break", false).gte("date", weekStartStr)
-        .order("date", { ascending: true }).limit(50),
-      backend.from("time_entries" as any).select("*")
-        .eq("user_id", user.id).eq("is_break", true).gte("date", weekStartStr)
-        .not("clock_out", "is", null).limit(100),
-    ]);
-
-    setClockEntry(openWorkRes.data ? (openWorkRes.data as unknown as DashTimeEntry) : null);
-    setBreakEntry(openBreakRes.data ? (openBreakRes.data as unknown as DashTimeEntry) : null);
-
-    const entries = (recentRes.data as unknown as DashTimeEntry[]) || [];
-    const breaks = (breaksRes.data as unknown as DashTimeEntry[]) || [];
-    const todayDone = entries.filter((e) => e.date === today && e.clock_out).reduce((s, e) => s + entryMinutes(e), 0);
-    const weekDone = entries.filter((e) => e.clock_out).reduce((s, e) => s + entryMinutes(e), 0);
-    const todayBreaks = breaks.filter((b) => b.date === today).reduce((s, b) => s + entryMinutes(b), 0);
-    const weekBreaks = breaks.reduce((s, b) => s + entryMinutes(b), 0);
-    setTodayTimeMin(todayDone);
-    setWeekTimeMin(weekDone);
-    setTodayBreakMin(todayBreaks);
-    setWeekBreakMin(weekBreaks);
-  }, [user, today]);
-
-  useEffect(() => {
-    if (role === "team_member") fetchTimeData();
-  }, [role, fetchTimeData]);
-
-  // ── Clock actions ─────────────────────────────────────────────────────────
-  const handleClockIn = useCallback(async () => {
-    if (!user || clockingIn) return;
-    setClockingIn(true);
-    const { error } = await backend.from("time_entries" as any).insert({
-      user_id: user.id, date: today,
-      clock_in: new Date().toISOString(),
-      notes: shiftNote || null, is_break: false,
-    });
-    if (error) {
-      toast({ title: "Clock-in failed", description: error.message, variant: "destructive" });
-    } else {
-      toast({ title: "Clocked in!", description: `Started at ${new Date().toLocaleTimeString()}` });
-      setShiftNote(""); await fetchTimeData();
-    }
-    setClockingIn(false);
-  }, [user, clockingIn, shiftNote, today, fetchTimeData, toast]);
-
-  const handleClockOut = useCallback(async () => {
-    if (!clockEntry || clockingOut) return;
-    setClockingOut(true);
-    if (breakEntry) {
-      await backend.from("time_entries" as any).update({ clock_out: new Date().toISOString() }).eq("id", breakEntry.id);
-    }
-    const { error } = await backend.from("time_entries" as any).update({ clock_out: new Date().toISOString() }).eq("id", clockEntry.id);
-    if (error) {
-      toast({ title: "Clock-out failed", description: error.message, variant: "destructive" });
-    } else {
-      toast({ title: "Clocked out!", description: `Ended at ${new Date().toLocaleTimeString()}` });
-    }
-    await fetchTimeData();
-    setClockingOut(false);
-  }, [clockEntry, clockingOut, breakEntry, fetchTimeData, toast]);
-
-  const handleStartBreak = useCallback(async () => {
-    if (!user || !clockEntry || breakLoading) return;
-    setBreakLoading(true);
-    const { error } = await backend.from("time_entries" as any).insert({
-      user_id: user.id, date: today, clock_in: new Date().toISOString(), is_break: true,
-    });
-    if (error) {
-      toast({ title: "Break start failed", description: error.message, variant: "destructive" });
-    } else {
-      toast({ title: "Break started" });
-    }
-    await fetchTimeData();
-    setBreakLoading(false);
-  }, [user, clockEntry, breakLoading, today, fetchTimeData, toast]);
-
-  const handleEndBreak = useCallback(async () => {
-    if (!breakEntry || breakLoading) return;
-    setBreakLoading(true);
-    const { error } = await backend.from("time_entries" as any).update({ clock_out: new Date().toISOString() }).eq("id", breakEntry.id);
-    if (error) {
-      toast({ title: "Break end failed", description: error.message, variant: "destructive" });
-    } else {
-      toast({ title: "Break ended", description: "Welcome back!" });
-    }
-    await fetchTimeData();
-    setBreakLoading(false);
-  }, [breakEntry, breakLoading, fetchTimeData, toast]);
 
   const getProfileName = (userId: string | null) => {
     if (!userId) return "Unassigned";
@@ -556,6 +473,14 @@ export default function Dashboard() {
     const isOnBreak = !!clockEntry && !!breakEntry;
     const notStarted = !clockEntry;
 
+    const todayGrossTotalSecs = todayTimeSecs + activeWorkSecs;
+    const todayBreakTotalSecs = todayBreakSecs + activeBreakSecs;
+    const todayNetTotalSecs = todayGrossTotalSecs - todayBreakTotalSecs;
+    
+    const weekGrossTotalSecs = weekTimeSecs + activeWorkSecs;
+    const weekBreakTotalSecs = weekBreakSecs + activeBreakSecs;
+    const weekNetTotalSecs = weekGrossTotalSecs - weekBreakTotalSecs;
+
     return (
       <div className="animate-fade-in">
         <div className="mb-6">
@@ -625,14 +550,14 @@ export default function Dashboard() {
           {/* Action buttons */}
           <div className="flex gap-2">
             {notStarted ? (
-              <Button onClick={handleClockIn} disabled={clockingIn} className="flex-1 gap-2" size="lg">
+              <Button onClick={() => { clockIn(shiftNote); setShiftNote(""); }} disabled={clockingIn} className="flex-1 gap-2" size="lg">
                 <LogIn className="h-4 w-4" />
                 {clockingIn ? "Clocking In…" : "Clock In"}
               </Button>
             ) : (
               <>
                 <Button
-                  onClick={handleClockOut} disabled={clockingOut}
+                  onClick={clockOut} disabled={clockingOut}
                   variant="destructive" className="flex-1 gap-2"
                 >
                   <LogOut className="h-4 w-4" />
@@ -640,7 +565,7 @@ export default function Dashboard() {
                 </Button>
                 {!breakEntry ? (
                   <Button
-                    onClick={handleStartBreak} disabled={breakLoading}
+                    onClick={startBreak} disabled={breakLoading}
                     variant="outline" className="gap-2"
                   >
                     <Coffee className="h-4 w-4" />
@@ -648,7 +573,7 @@ export default function Dashboard() {
                   </Button>
                 ) : (
                   <Button
-                    onClick={handleEndBreak} disabled={breakLoading}
+                    onClick={endBreak} disabled={breakLoading}
                     variant="outline" className="gap-2 border-warning text-warning hover:bg-warning/10"
                   >
                     <Coffee className="h-4 w-4" />
@@ -660,28 +585,26 @@ export default function Dashboard() {
           </div>
 
           {/* Daily / weekly summary (net = gross − breaks) */}
-          {(todayTimeMin > 0 || weekTimeMin > 0) && (
-            <div className="grid grid-cols-2 gap-3 mt-4 pt-4 border-t border-border">
-              <div className="text-center">
-                <p className="text-xl font-bold">{dashFormatDuration(Math.max(0, todayTimeMin - todayBreakMin))}</p>
-                <p className="text-xs text-muted-foreground">Today (net)</p>
-                {todayBreakMin > 0 && (
-                  <p className="text-[10px] text-muted-foreground mt-0.5">
-                    {dashFormatDuration(todayTimeMin)} − {dashFormatDuration(todayBreakMin)} breaks
-                  </p>
-                )}
-              </div>
-              <div className="text-center">
-                <p className="text-xl font-bold">{dashFormatDuration(Math.max(0, weekTimeMin - weekBreakMin))}</p>
-                <p className="text-xs text-muted-foreground">This Week (net)</p>
-                {weekBreakMin > 0 && (
-                  <p className="text-[10px] text-muted-foreground mt-0.5">
-                    {dashFormatDuration(weekTimeMin)} − {dashFormatDuration(weekBreakMin)} breaks
-                  </p>
-                )}
-              </div>
+          <div className="grid grid-cols-2 gap-3 mt-4 pt-4 border-t border-border">
+            <div className="text-center">
+              <p className="text-xl font-bold">{dashFormatDuration(Math.max(0, todayNetTotalSecs))}</p>
+              <p className="text-xs text-muted-foreground">Today (net)</p>
+              {todayBreakTotalSecs > 0 && (
+                <p className="text-[10px] text-muted-foreground mt-0.5">
+                  {dashFormatDuration(todayGrossTotalSecs)} − {dashFormatDuration(todayBreakTotalSecs)} breaks
+                </p>
+              )}
             </div>
-          )}
+            <div className="text-center">
+              <p className="text-xl font-bold">{dashFormatDuration(Math.max(0, weekNetTotalSecs))}</p>
+              <p className="text-xs text-muted-foreground">This Week (net)</p>
+              {weekBreakTotalSecs > 0 && (
+                <p className="text-[10px] text-muted-foreground mt-0.5">
+                  {dashFormatDuration(weekGrossTotalSecs)} − {dashFormatDuration(weekBreakTotalSecs)} breaks
+                </p>
+              )}
+            </div>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">

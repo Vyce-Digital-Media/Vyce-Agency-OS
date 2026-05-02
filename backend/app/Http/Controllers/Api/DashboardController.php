@@ -38,8 +38,8 @@ class DashboardController extends Controller
 
         $totalEstimated = Deliverable::query()->whereNotIn('status', ['approved', 'delivered'])->sum('estimated_minutes');
         $totalActual = TimeEntry::query()->whereNull('clock_out')->count() === 0 
-            ? TimeEntry::query()->sum('duration_minutes') 
-            : TimeEntry::query()->sum('duration_minutes'); // Simple sum for now
+            ? TimeEntry::query()->sum('duration_seconds') 
+            : TimeEntry::query()->sum('duration_seconds'); // Simple sum for now
 
         return response()->json([
             'clients' => Client::query()->when($user->hasRole('client'), fn ($q) => $q->where('user_id', $user->id))->get(),
@@ -48,7 +48,7 @@ class DashboardController extends Controller
             'time_entries' => TimeEntry::query()->when(! $user->hasAnyRole(['admin', 'manager']), fn ($q) => $q->where('user_id', $user->id))->latest('clock_in')->limit(100)->get(),
             'analytics' => $user->hasAnyRole(['admin', 'manager']) ? [
                 'total_estimated_hours' => round($totalEstimated / 60, 1),
-                'total_actual_hours' => round($totalActual / 60, 1),
+                'total_actual_hours' => round($totalActual / 3600, 1),
             ] : null,
         ]);
     }

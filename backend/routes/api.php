@@ -51,6 +51,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::patch('/team/{user}/profile', [TeamController::class, 'updateProfile']);
     Route::get('/team/salaries', [TeamController::class, 'salaries']);
 
+    Route::get('/attendance/status', [AttendanceController::class, 'status']);
     Route::get('/attendance', [AttendanceController::class, 'index']);
     Route::post('/attendance', [AttendanceController::class, 'store']);
     Route::post('/attendance/clock-in', [AttendanceController::class, 'clockIn']);

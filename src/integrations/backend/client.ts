@@ -152,6 +152,9 @@ class LocalQuery {
 
 export const backend = {
   get: (path: string) => apiRequest(path, { method: "GET", token: getToken() }),
+  post: (path: string, body?: any) => apiRequest(path, { method: "POST", body: body ? JSON.stringify(body) : undefined, token: getToken() }),
+  patch: (path: string, body?: any) => apiRequest(path, { method: "PATCH", body: body ? JSON.stringify(body) : undefined, token: getToken() }),
+  delete: (path: string) => apiRequest(path, { method: "DELETE", token: getToken() }),
   from: (table: string) => new LocalQuery(table),
   rpc: (name: string) => {
     if (name === "get_team_directory") {
